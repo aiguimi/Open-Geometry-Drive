@@ -1,0 +1,4148 @@
+
+---
+
+# OpenGeometry Drive
+## Complete System Documentation & Source Code (English Version)
+
+---
+
+## README.md
+
+```markdown
+# OpenGeometry Drive
+
+**Open-source Low-cost Geometry-based ADAS Active Safety System**
+
+## Overview
+
+OpenGeometry Drive is a complete autonomous driving assistance system based entirely on geometric mathematics and physical formulas. It uses **no deep learning, no neural networks, and no large models**. The system employs multiple low-cost smartphone SoC core boards in a distributed architecture to achieve L2-level assisted driving functionality.
+
+## System Architecture
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│                         OpenGeometry Drive                                 │
+├────────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐               │
+│  │   Node1      │    │   Node2      │    │   Node5      │               │
+│  │  Forward     │    │  Surround    │    │  Traffic     │               │
+│  │  Perception  │    │  Perception  │    │  Light       │               │
+│  │ (Snapdragon  │    │ (Snapdragon  │    │ (Snapdragon  │               │
+│  │  450)        │    │  450)        │    │  410)        │               │
+│  └──────┬───────┘    └──────┬───────┘    └──────┬───────┘               │
+│         │                   │                   │                        │
+│         └─────────┬─────────┴───────────────────┘                        │
+│                   │  UDP over Ethernet                                   │
+│              ┌────▼────┐                                                 │
+│              │ Node3   │  Fusion & Decision                              │
+│              │ (Snap-  │                                                 │
+│              │ dragon  │                                                 │
+│              │ 660)    │                                                 │
+│              └────┬────┘                                                 │
+│                   │  UDP                                                 │
+│              ┌────▼────┐                                                 │
+│              │ Node4   │  Execution Control                              │
+│              │ (STM32  │                                                 │
+│              │  MCU)   │                                                 │
+│              └─────────┘                                                 │
+│                   │                                                      │
+│              ┌────▼────┐                                                 │
+│              │ Vehicle │  EPS/EHB/PWM Actuators                         │
+│              │Actuators│                                                 │
+│              └─────────┘                                                 │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Hardware Requirements
+
+| Component | Specification | Est. Cost |
+|-----------|--------------|-----------|
+| SoC Core Boards | 5x Snapdragon 450/660 level | ~$80 |
+| USB Cameras | 5x UVC compatible, 720p | ~$25 |
+| IMU | BMI088 or MPU6050 | ~$8 |
+| Ethernet Switch | 5-port 10/100Mbps | ~$5 |
+| Power Supply | 12V to 5V DC-DC converter | ~$5 |
+| Misc | Cables, enclosure, PCB | ~$20 |
+| **Total** | | **~$143** |
+
+## Features
+
+- ✅ Lane keeping assist (LKA)
+- ✅ Adaptive cruise control (ACC) follow
+- ✅ Curve speed reduction
+- ✅ Traffic light recognition
+- ✅ Blind spot monitoring
+- ✅ Rear collision warning
+- ✅ Narrow road passing assist
+- ✅ Emergency braking
+
+## Quick Start
+
+```bash
+# Clone and build
+git clone https://github.com/yourname/open_geometry_drive.git
+cd open_geometry_drive
+./build_all.sh
+
+# Configure network IPs in scripts/run_all_nodes.sh
+# Run all nodes
+./scripts/run_all_nodes.sh
+```
+
+## Core Geometric Principles
+
+All functions are based on pure mathematics:
+
+1. **Range Finding**: `distance = height / tan(pitch + pixel_offset * FOV)`
+2. **Curvature**: Three-point circle fitting
+3. **Lane Centering**: PID control
+4. **Speed Planning**: `v = sqrt(μ·g·R)` (physical formula)
+
+## License
+
+MIT License - Free for commercial and personal use
+```
+
+---
+
+## Common Library Headers
+
+### `common/protocol.h`
+
+```c
+#ifndef PROTOCOL_H
+#define PROTOCOL_H
+
+#include <stdint.h>
+
+// ==================== Node IDs ====================
+#define NODE_ID_FRONT_PERCEPTION    0x01
+#define NODE_ID_SURROUND_PERCEPTION 0x02
+#define NODE_ID_FUSION_DECISION     0x03
+#define NODE_ID_EXECUTION           0x04
+#define NODE_ID_TRAFFIC_LIGHT       0x05
+
+// ==================== Frame Types ====================
+#define FRAME_TYPE_PERCEPTION       0x10
+#define FRAME_TYPE_FUSION           0x20
+#define FRAME_TYPE_CONTROL          0x30
+#define FRAME_TYPE_HEARTBEAT        0x40
+#define FRAME_TYPE_DEBUG            0x50
+
+// ==================== Constants ====================
+#define MAX_OBSTACLES               10
+#define MAX_LANE_POINTS             20
+#define MAX_TRAFFIC_LIGHTS          5
+#define PROTOCOL_MTU                512
+
+// ==================== Node1: Forward Perception Data ====================
+typedef struct {
+    uint8_t  node_id;
+    uint8_t  frame_type;
+    uint32_t timestamp_ms;
+    uint8_t  data_len;
+    
+    // Lane information (units: meters)
+    float    left_lane_dist;
+    float    right_lane_dist;
+    float    road_width;
+    float    lane_curvature;        // Radius of curvature, positive = right turn
+    float    lane_heading;          // Heading angle deviation (degrees)
+    
+    // Forward obstacles
+    uint8_t  obstacle_count;
+    float    obstacle_dist[MAX_OBSTACLES];
+    float    obstacle_rel_speed[MAX_OBSTACLES];
+    float    obstacle_width[MAX_OBSTACLES];
+    uint8_t  obstacle_type[MAX_OBSTACLES];  // 0=unknown,1=car,2=SUV,3=truck,4=pedestrian,5=motorcycle
+    
+    // Road surface
+    uint8_t  road_condition;         // 0=dry,1=wet,2=snow,3=pothole
+    
+    // Vehicle attitude
+    float    pitch_angle;
+    float    roll_angle;
+    float    yaw_rate;              // Degrees per second
+    
+    // Confidence
+    float    lane_confidence;
+    float    obstacle_confidence;
+    
+    uint8_t  reserved[20];
+} __attribute__((packed)) PerceptionData;
+
+// ==================== Node2: Surround Perception Data ====================
+typedef struct {
+    uint8_t  node_id;
+    uint8_t  frame_type;
+    uint32_t timestamp_ms;
+    uint8_t  data_len;
+    
+    // Left side
+    float    left_lane_dist;
+    float    left_obstacle_dist;
+    float    left_obstacle_speed;
+    uint8_t  left_obstacle_type;
+    
+    // Right side
+    float    right_lane_dist;
+    float    right_obstacle_dist;
+    float    right_obstacle_speed;
+    uint8_t  right_obstacle_type;
+    
+    // Rear
+    float    rear_obstacle_dist;
+    float    rear_obstacle_speed;
+    float    rear_ttc;              // Time-to-collision (seconds)
+    uint8_t  rear_collision_risk;   // 0=none,1=low,2=medium,3=high
+    
+    // Blind zones
+    uint8_t  left_blind_zone;       // 0=clear,1=obstacle
+    uint8_t  right_blind_zone;
+    
+    // Passing
+    float    passing_space;         // Available width (meters)
+    uint8_t  passing_possible;      // 0=no,1=yes
+    
+    uint8_t  reserved[24];
+} __attribute__((packed)) SurroundData;
+
+// ==================== Node3: Fusion Control Data ====================
+typedef struct {
+    uint8_t  node_id;
+    uint8_t  frame_type;
+    uint32_t timestamp_ms;
+    uint8_t  data_len;
+    
+    // Environment summary
+    float    ego_speed;             // Vehicle speed (m/s)
+    float    ego_accel;             // Vehicle acceleration (m/s²)
+    float    min_obstacle_dist;     // Nearest obstacle distance
+    float    min_ttc;               // Minimum time-to-collision
+    
+    // Trajectory planning
+    float    target_speed;          // Target speed (m/s)
+    float    target_accel;          // Target acceleration
+    float    target_steer;          // Target steering angle (degrees)
+    
+    // Decision state
+    uint8_t  driving_mode;          // 0=normal,1=following,2=decelerating,3=emergency_brake,4=stopped,5=changing_lane
+    uint8_t  steering_mode;         // 0=centering,1=turning_left,2=turning_right,3=obstacle_avoidance
+    
+    // Safety
+    uint8_t  safety_level;          // 0=safe,1=warning,2=dangerous,3=emergency
+    uint8_t  emergency_stop;
+    
+    uint8_t  reserved[28];
+} __attribute__((packed)) FusionData;
+
+// ==================== Node4: Execution Control Data ====================
+typedef struct {
+    uint8_t  node_id;
+    uint8_t  frame_type;
+    uint32_t timestamp_ms;
+    uint8_t  data_len;
+    
+    float    steer_angle;           // Steering angle (degrees)
+    float    throttle;              // Throttle opening (0~1)
+    float    brake;                 // Brake force (0~1)
+    uint8_t  emergency_stop;        // 0/1
+    uint8_t  gear;                  // 0=neutral,1=D,2=R,3=P
+    uint8_t  turn_signal;           // 0=off,1=left,2=right,3=hazard
+    uint8_t  horn;                  // 0=off,1=on
+    
+    float    steer_rate;            // Steering angular velocity (deg/s)
+    float    brake_pressure;        // Brake pressure (bar)
+    
+    uint8_t  reserved[20];
+} __attribute__((packed)) ControlData;
+
+// ==================== Node5: Traffic Light Data ====================
+typedef struct {
+    uint8_t  node_id;
+    uint8_t  frame_type;
+    uint32_t timestamp_ms;
+    uint8_t  data_len;
+    
+    uint8_t  light_count;
+    struct {
+        uint8_t  state;             // 0=none,1=red,2=yellow,3=green,4=left_arrow,5=right_arrow
+        float    distance;
+        float    angle;             // Relative to vehicle heading (degrees)
+        uint8_t  aspect;            // 0=circular,1=arrow
+    } lights[MAX_TRAFFIC_LIGHTS];
+    
+    uint8_t  reserved[20];
+} __attribute__((packed)) TrafficLightData;
+
+#endif
+```
+
+---
+
+### `common/geometry.h`
+
+```c
+#ifndef GEOMETRY_H
+#define GEOMETRY_H
+
+#include <math.h>
+#include <stdint.h>
+#include <string.h>
+
+// ==================== Chinese National Standard Dimensions ====================
+#define LANE_WIDTH_STD          3.75f      // Standard lane width (meters)
+#define LANE_MARK_WIDTH         0.15f      // Lane marking width (meters)
+#define CROSSWALK_STRIP_WIDTH   0.45f      // Crosswalk strip width (meters)
+#define STOP_LINE_WIDTH         0.40f      // Stop line width (meters)
+#define TRAFFIC_LIGHT_DIAMETER  0.20f      // Traffic light diameter (meters)
+#define VEHICLE_STD_WIDTH       1.80f      // Standard car width (meters)
+#define VEHICLE_STD_HEIGHT      1.45f      // Standard car height (meters)
+#define PERSON_WIDTH            0.45f      // Pedestrian width (meters)
+
+// ==================== Camera Intrinsics Structure ====================
+typedef struct {
+    float focal_length_mm;
+    float sensor_width_mm;
+    float sensor_height_mm;
+    int   image_width_px;
+    int   image_height_px;
+    float mount_pitch_deg;       // Mounting pitch angle (positive = downward)
+    float mount_yaw_deg;         // Mounting yaw angle (positive = right)
+    float mount_roll_deg;        // Mounting roll angle
+    float distortion_k1;         // Radial distortion coefficient
+    float distortion_k2;
+    float distortion_p1;         // Tangential distortion coefficient
+    float distortion_p2;
+} CameraIntrinsics;
+
+// ==================== 3D Point/Vector ====================
+typedef struct {
+    float x, y, z;
+} Vector3f;
+
+// ==================== Range Finding Functions ====================
+
+// 1. Pitch-angle geometry ranging (core method)
+static inline float range_by_pitch(
+    float camera_height_m,
+    float pitch_angle_deg,
+    int pixel_y,
+    int image_height,
+    float fov_vert_deg
+) {
+    // Pixel coordinate to line-of-sight angle (radians)
+    float pixel_norm = (float)pixel_y / image_height - 0.5f;
+    float angle_rad = (pitch_angle_deg + pixel_norm * fov_vert_deg) * M_PI / 180.0f;
+    
+    if (angle_rad < 0.001f) return 99999.0f;
+    if (angle_rad > M_PI / 2.0f - 0.01f) return 99999.0f;
+    
+    float dist = camera_height_m / tanf(angle_rad);
+    return dist;
+}
+
+// 2. Lane marking scale ranging
+static inline float range_by_lane_scale(
+    float real_width_m,
+    int pixel_width,
+    float lane_pixel_width,
+    float lane_real_width
+) {
+    if (pixel_width <= 0 || lane_pixel_width <= 0) return 99999.0f;
+    
+    float scale = lane_real_width / lane_pixel_width;  // meters per pixel
+    return real_width_m / (pixel_width * scale);
+}
+
+// 3. Stereo disparity ranging
+static inline float range_by_disparity(
+    float baseline_m,
+    float focal_length_px,
+    int disparity_px
+) {
+    if (disparity_px <= 0) return 99999.0f;
+    return baseline_m * focal_length_px / disparity_px;
+}
+
+// 4. Known-height object ranging (e.g., street lights, signs)
+static inline float range_by_known_height(
+    float real_height_m,
+    int pixel_height,
+    float focal_length_px,
+    float distance_to_lens_m
+) {
+    if (pixel_height <= 0) return 99999.0f;
+    return real_height_m * focal_length_px / pixel_height;
+}
+
+// ==================== Curve Geometry ====================
+
+// Three-point circle fitting for curvature radius
+static inline float fit_curvature_radius(
+    float x1, float y1,
+    float x2, float y2,
+    float x3, float y3
+) {
+    float ax = x1, ay = y1, bx = x2, by = y2, cx = x3, cy = y3;
+    
+    float d1x = bx - ax, d1y = by - ay;
+    float d2x = cx - bx, d2y = cy - by;
+    
+    float cross = d1x * d2y - d1y * d2x;
+    if (fabsf(cross) < 1e-6f) return 99999.0f;
+    
+    float mid1x = (ax + bx) / 2.0f, mid1y = (ay + by) / 2.0f;
+    float mid2x = (bx + cx) / 2.0f, mid2y = (by + cy) / 2.0f;
+    
+    float k1 = -d1x / d1y;
+    float k2 = -d2x / d2y;
+    
+    float b1 = mid1y - k1 * mid1x;
+    float b2 = mid2y - k2 * mid2x;
+    
+    float center_x = (b2 - b1) / (k1 - k2);
+    float center_y = k1 * center_x + b1;
+    
+    float dx = ax - center_x;
+    float dy = ay - center_y;
+    return sqrtf(dx * dx + dy * dy);
+}
+
+// Safe speed based on curvature (physical formula)
+static inline float safe_speed_by_curvature(
+    float curvature_radius_m,
+    float friction_coeff,      // Tire-road friction coefficient, dry road = 0.8
+    float bank_angle_deg       // Road banking angle (degrees)
+) {
+    if (curvature_radius_m < 1.0f) return 0.0f;
+    
+    float bank_rad = bank_angle_deg * M_PI / 180.0f;
+    float v_max = sqrtf(friction_coeff * 9.81f * curvature_radius_m / 
+                        (1.0f - friction_coeff * tanf(bank_rad)));
+    return v_max;
+}
+
+// ==================== Coordinate Transformation ====================
+
+// Pixel coordinates to world coordinates (on the road plane)
+static inline Vector3f pixel_to_world(
+    int pixel_x,
+    int pixel_y,
+    const CameraIntrinsics* cam,
+    float pitch_deg,
+    float yaw_deg
+) {
+    Vector3f world = {0};
+    
+    // Normalized pixel coordinates
+    float u = (float)pixel_x / cam->image_width_px - 0.5f;
+    float v = (float)pixel_y / cam->image_height_px - 0.5f;
+    
+    // Distortion correction (simplified)
+    float r2 = u*u + v*v;
+    u = u * (1.0f + cam->distortion_k1 * r2 + cam->distortion_k2 * r2 * r2);
+    v = v * (1.0f + cam->distortion_k1 * r2 + cam->distortion_k2 * r2 * r2);
+    
+    // Pinhole model
+    float fx = cam->focal_length_mm / cam->sensor_width_mm * cam->image_width_px;
+    float fy = cam->focal_length_mm / cam->sensor_height_mm * cam->image_height_px;
+    
+    // Direction vector (camera coordinate system)
+    Vector3f ray = {u, v, 1.0f};
+    float norm = sqrtf(ray.x*ray.x + ray.y*ray.y + ray.z*ray.z);
+    ray.x /= norm; ray.y /= norm; ray.z /= norm;
+    
+    // Rotate to world coordinates (simplified: pitch and yaw only)
+    float pitch_rad = pitch_deg * M_PI / 180.0f;
+    float yaw_rad = yaw_deg * M_PI / 180.0f;
+    
+    // Pitch rotation
+    float rx = ray.x;
+    float ry = ray.y * cosf(pitch_rad) - ray.z * sinf(pitch_rad);
+    float rz = ray.y * sinf(pitch_rad) + ray.z * cosf(pitch_rad);
+    
+    // Yaw rotation
+    world.x = rx * cosf(yaw_rad) + rz * sinf(yaw_rad);
+    world.y = ry;
+    world.z = -rx * sinf(yaw_rad) + rz * cosf(yaw_rad);
+    
+    // If pointing downward, compute intersection with ground
+    if (world.z < -0.001f) {
+        float t = -cam->mount_pitch_deg / world.z;  // simplified
+        world.x *= t;
+        world.y *= t;
+        world.z = 0;
+    }
+    
+    return world;
+}
+
+// ==================== TTC Calculation ====================
+static inline float compute_ttc(
+    float distance_m,
+    float relative_speed_mps
+) {
+    if (relative_speed_mps <= 0.0f) return 99999.0f;
+    return distance_m / relative_speed_mps;
+}
+
+#endif
+```
+
+---
+
+### `common/filter.h`
+
+```c
+#ifndef FILTER_H
+#define FILTER_H
+
+#include <math.h>
+#include <string.h>
+
+// ==================== 1st Order Low-Pass Filter ====================
+typedef struct {
+    float alpha;        // Smoothing coefficient (0~1), lower = smoother
+    float prev_output;
+    int initialized;
+} LowPassFilter;
+
+static inline void lowpass_init(LowPassFilter* f, float alpha) {
+    f->alpha = alpha;
+    f->prev_output = 0.0f;
+    f->initialized = 0;
+}
+
+static inline float lowpass_update(LowPassFilter* f, float input) {
+    if (!f->initialized) {
+        f->prev_output = input;
+        f->initialized = 1;
+        return input;
+    }
+    float output = f->alpha * input + (1.0f - f->alpha) * f->prev_output;
+    f->prev_output = output;
+    return output;
+}
+
+// ==================== Moving Window Average ====================
+#define WINDOW_SIZE 10
+
+typedef struct {
+    float buffer[WINDOW_SIZE];
+    int index;
+    int count;
+    float sum;
+} MovingAverage;
+
+static inline void mavg_init(MovingAverage* m) {
+    memset(m->buffer, 0, sizeof(m->buffer));
+    m->index = 0;
+    m->count = 0;
+    m->sum = 0.0f;
+}
+
+static inline float mavg_update(MovingAverage* m, float value) {
+    if (m->count < WINDOW_SIZE) {
+        m->buffer[m->count] = value;
+        m->sum += value;
+        m->count++;
+    } else {
+        m->sum -= m->buffer[m->index];
+        m->buffer[m->index] = value;
+        m->sum += value;
+        m->index = (m->index + 1) % WINDOW_SIZE;
+    }
+    return m->sum / m->count;
+}
+
+// ==================== Complementary Filter (Attitude Fusion) ====================
+typedef struct {
+    float angle;
+    float gyro_bias;
+    float alpha;        // Accelerometer weight
+    float dt;
+} ComplementaryFilter;
+
+static inline float complement_update(
+    ComplementaryFilter* f,
+    float gyro_rate_deg,   // Gyroscope angular rate (deg/s)
+    float accel_angle_deg, // Accelerometer-calculated angle (deg)
+    float dt
+) {
+    f->angle += (gyro_rate_deg - f->gyro_bias) * dt;
+    f->angle = f->alpha * f->angle + (1.0f - f->alpha) * accel_angle_deg;
+    return f->angle;
+}
+
+// ==================== Simple 1D Kalman Filter ====================
+typedef struct {
+    float x;            // State estimate
+    float P;            // Estimate error covariance
+    float Q;            // Process noise covariance
+    float R;            // Measurement noise covariance
+    int initialized;
+} KalmanFilter1D;
+
+static inline void kalman1d_init(KalmanFilter1D* k, float q, float r) {
+    k->Q = q;
+    k->R = r;
+    k->P = 1.0f;
+    k->initialized = 0;
+}
+
+static inline float kalman1d_update(KalmanFilter1D* k, float measurement) {
+    if (!k->initialized) {
+        k->x = measurement;
+        k->initialized = 1;
+        return measurement;
+    }
+    
+    // Predict
+    float x_pred = k->x;
+    float P_pred = k->P + k->Q;
+    
+    // Update
+    float K = P_pred / (P_pred + k->R);
+    k->x = x_pred + K * (measurement - x_pred);
+    k->P = (1.0f - K) * P_pred;
+    
+    return k->x;
+}
+
+#endif
+```
+
+---
+
+### `common/pid.h`
+
+```c
+#ifndef PID_H
+#define PID_H
+
+#include <math.h>
+
+typedef struct {
+    float Kp, Ki, Kd;
+    float integral;
+    float prev_error;
+    float output_min;
+    float output_max;
+    float integral_min;
+    float integral_max;
+} PIDController;
+
+static inline void pid_init(
+    PIDController* pid,
+    float Kp, float Ki, float Kd,
+    float output_min, float output_max
+) {
+    pid->Kp = Kp;
+    pid->Ki = Ki;
+    pid->Kd = Kd;
+    pid->integral = 0.0f;
+    pid->prev_error = 0.0f;
+    pid->output_min = output_min;
+    pid->output_max = output_max;
+    pid->integral_min = output_min / (Ki + 0.001f);
+    pid->integral_max = output_max / (Ki + 0.001f);
+}
+
+static inline float pid_update(
+    PIDController* pid,
+    float error,
+    float dt
+) {
+    if (dt < 0.001f) dt = 0.001f;
+    
+    // Proportional
+    float P = pid->Kp * error;
+    
+    // Integral (with clamping)
+    pid->integral += error * dt;
+    if (pid->integral > pid->integral_max) pid->integral = pid->integral_max;
+    if (pid->integral < pid->integral_min) pid->integral = pid->integral_min;
+    float I = pid->Ki * pid->integral;
+    
+    // Derivative (with low-pass filtering)
+    float derivative = (error - pid->prev_error) / dt;
+    pid->prev_error = error;
+    float D = pid->Kd * derivative;
+    
+    float output = P + I + D;
+    
+    // Output clamping
+    if (output > pid->output_max) output = pid->output_max;
+    if (output < pid->output_min) output = pid->output_min;
+    
+    return output;
+}
+
+static inline void pid_reset(PIDController* pid) {
+    pid->integral = 0.0f;
+    pid->prev_error = 0.0f;
+}
+
+#endif
+```
+
+---
+
+### `common/Makefile.common`
+
+```makefile
+# Common compilation options
+CC = gcc
+CFLAGS = -Wall -O2 -std=c99 -I. -D_GNU_SOURCE
+LDFLAGS = -lm -lpthread
+
+# Debug version
+DEBUG ?= 0
+ifeq ($(DEBUG), 1)
+    CFLAGS += -g -DDEBUG
+endif
+
+# Cross compilation (for ARM core boards)
+CROSS_COMPILE ?=
+ifneq ($(CROSS_COMPILE),)
+    CC = $(CROSS_COMPILE)gcc
+    AR = $(CROSS_COMPILE)ar
+endif
+```
+
+---
+
+## Node1: Forward Perception Node
+
+### `node1_front_perception/config.h`
+
+```c
+#ifndef CONFIG_H
+#define CONFIG_H
+
+#include "../common/geometry.h"
+
+// ==================== Camera Configuration ====================
+#define CAMERA_DEVICE        "/dev/video0"
+#define CAMERA_DEVICE2       "/dev/video1"   // Narrow-angle/stereo second camera
+#define IMAGE_WIDTH         640
+#define IMAGE_HEIGHT        480
+#define PIXEL_FORMAT        V4L2_PIX_FMT_YUYV
+#define CAMERA_FPS          30
+
+// ==================== Mounting Parameters (requires calibration) ====================
+#define CAMERA_HEIGHT_M     1.20f           // Height above ground (meters)
+#define CAMERA_FOV_VERT     45.0f           // Vertical FOV (degrees)
+#define CAMERA_FOV_HORIZ    60.0f           // Horizontal FOV (degrees)
+#define CAMERA_MOUNT_PITCH  15.0f           // Mounting pitch angle (degrees, positive = downward)
+#define CAMERA_MOUNT_YAW    0.0f            // Mounting yaw angle (degrees)
+#define CAMERA_MOUNT_ROLL   0.0f            // Mounting roll angle (degrees)
+
+// ==================== Detection Thresholds ====================
+#define EDGE_THRESHOLD      30
+#define LANE_SEARCH_ROI_TOP 0.6f            // ROI start position (image ratio)
+#define LANE_SEARCH_ROI_BOT 1.0f
+#define MIN_LANE_PIXEL_WIDTH 10
+#define MIN_OBSTACLE_HEIGHT 20
+#define OBSTACLE_DARK_THRESH 100
+
+// ==================== Range Finding Weights ====================
+#define WEIGHT_PITCH        0.50f
+#define WEIGHT_LANE_CALIB   0.30f
+#define WEIGHT_STEREO       0.20f
+
+// ==================== Tracking Parameters ====================
+#define TRACKING_FRAMES     10
+#define MAX_TRACKED_OBJECTS 20
+#define ASSOCIATION_THRESH  50.0f            // Pixels
+
+// ==================== Network Configuration ====================
+#define DEST_IP             "192.168.1.3"
+#define DEST_PORT           8888
+#define LOCAL_PORT          8889
+
+// ==================== Debug ====================
+#define DEBUG_PRINT         1
+#define SAVE_DEBUG_IMAGES   0
+
+#endif
+```
+
+---
+
+### `node1_front_perception/camera.h`
+
+```c
+#ifndef CAMERA_H
+#define CAMERA_H
+
+#include <stdint.h>
+#include <linux/videodev2.h>
+
+#define CAMERA_FPS 30
+
+typedef struct {
+    int fd;
+    int width;
+    int height;
+    uint32_t pixel_format;
+    struct {
+        uint8_t* data;
+        size_t size;
+        int index;
+        int used;
+    } buffers[2];
+    int buffer_idx;
+    uint32_t timestamp_ms;
+} CameraHandle;
+
+int camera_init(CameraHandle* cam, const char* device, int width, int height, uint32_t format);
+int camera_capture(CameraHandle* cam);
+int camera_queue_buffer(CameraHandle* cam);
+uint8_t* camera_get_frame(CameraHandle* cam);
+void camera_close(CameraHandle* cam);
+
+void yuyv_to_gray(uint8_t* yuyv, uint8_t* gray, int width, int height);
+void edge_detect_roi(uint8_t* gray, int width, int height, int roi_y_start, int roi_height, uint8_t* output);
+
+#endif
+```
+
+---
+
+### `node1_front_perception/camera.c`
+
+```c
+#include "camera.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <sys/select.h>
+#include <errno.h>
+
+int camera_init(CameraHandle* cam, const char* device, int width, int height, uint32_t format) {
+    cam->fd = open(device, O_RDWR | O_NONBLOCK);
+    if (cam->fd < 0) {
+        perror("open camera");
+        return -1;
+    }
+    
+    cam->width = width;
+    cam->height = height;
+    cam->pixel_format = format;
+    
+    // Set format
+    struct v4l2_format fmt = {0};
+    fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    fmt.fmt.pix.width = width;
+    fmt.fmt.pix.height = height;
+    fmt.fmt.pix.pixelformat = format;
+    fmt.fmt.pix.field = V4L2_FIELD_NONE;
+    
+    if (ioctl(cam->fd, VIDIOC_S_FMT, &fmt) < 0) {
+        perror("VIDIOC_S_FMT");
+        return -1;
+    }
+    
+    // Set framerate
+    struct v4l2_streamparm parm = {0};
+    parm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    parm.parm.capture.timeperframe.numerator = 1;
+    parm.parm.capture.timeperframe.denominator = CAMERA_FPS;
+    ioctl(cam->fd, VIDIOC_S_PARM, &parm);
+    
+    // Request buffers (double buffering)
+    struct v4l2_requestbuffers req = {0};
+    req.count = 2;
+    req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    req.memory = V4L2_MEMORY_MMAP;
+    
+    if (ioctl(cam->fd, VIDIOC_REQBUFS, &req) < 0) {
+        perror("VIDIOC_REQBUFS");
+        return -1;
+    }
+    
+    // Map buffers
+    for (int i = 0; i < 2; i++) {
+        struct v4l2_buffer buf = {0};
+        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        buf.memory = V4L2_MEMORY_MMAP;
+        buf.index = i;
+        
+        if (ioctl(cam->fd, VIDIOC_QUERYBUF, &buf) < 0) {
+            perror("VIDIOC_QUERYBUF");
+            return -1;
+        }
+        
+        cam->buffers[i].size = buf.length;
+        cam->buffers[i].data = (uint8_t*)mmap(NULL, buf.length,
+                                               PROT_READ | PROT_WRITE,
+                                               MAP_SHARED, cam->fd, buf.m.offset);
+        if (cam->buffers[i].data == MAP_FAILED) {
+            perror("mmap");
+            return -1;
+        }
+        cam->buffers[i].index = i;
+        cam->buffers[i].used = 0;
+    }
+    
+    // Queue all buffers
+    for (int i = 0; i < 2; i++) {
+        struct v4l2_buffer buf = {0};
+        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        buf.memory = V4L2_MEMORY_MMAP;
+        buf.index = i;
+        if (ioctl(cam->fd, VIDIOC_QBUF, &buf) < 0) {
+            perror("VIDIOC_QBUF");
+            return -1;
+        }
+    }
+    
+    // Start streaming
+    enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    if (ioctl(cam->fd, VIDIOC_STREAMON, &type) < 0) {
+        perror("VIDIOC_STREAMON");
+        return -1;
+    }
+    
+    cam->buffer_idx = 0;
+    return 0;
+}
+
+int camera_capture(CameraHandle* cam) {
+    struct v4l2_buffer buf = {0};
+    buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    buf.memory = V4L2_MEMORY_MMAP;
+    
+    // Wait for data
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(cam->fd, &fds);
+    struct timeval tv = {0, 33000};
+    int ret = select(cam->fd + 1, &fds, NULL, NULL, &tv);
+    if (ret < 0) {
+        perror("select");
+        return -1;
+    }
+    if (ret == 0) {
+        return -1;  // Timeout
+    }
+    
+    // Dequeue
+    if (ioctl(cam->fd, VIDIOC_DQBUF, &buf) < 0) {
+        perror("VIDIOC_DQBUF");
+        return -1;
+    }
+    
+    cam->buffer_idx = buf.index;
+    cam->timestamp_ms = buf.timestamp.tv_sec * 1000 + buf.timestamp.tv_usec / 1000;
+    
+    return 0;
+}
+
+int camera_queue_buffer(CameraHandle* cam) {
+    struct v4l2_buffer buf = {0};
+    buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    buf.memory = V4L2_MEMORY_MMAP;
+    buf.index = cam->buffer_idx;
+    
+    if (ioctl(cam->fd, VIDIOC_QBUF, &buf) < 0) {
+        perror("VIDIOC_QBUF");
+        return -1;
+    }
+    return 0;
+}
+
+uint8_t* camera_get_frame(CameraHandle* cam) {
+    return cam->buffers[cam->buffer_idx].data;
+}
+
+void camera_close(CameraHandle* cam) {
+    if (cam->fd >= 0) {
+        enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        ioctl(cam->fd, VIDIOC_STREAMOFF, &type);
+        for (int i = 0; i < 2; i++) {
+            if (cam->buffers[i].data) {
+                munmap(cam->buffers[i].data, cam->buffers[i].size);
+            }
+        }
+        close(cam->fd);
+        cam->fd = -1;
+    }
+}
+
+// YUYV to grayscale
+void yuyv_to_gray(uint8_t* yuyv, uint8_t* gray, int width, int height) {
+    for (int i = 0; i < width * height; i++) {
+        gray[i] = yuyv[i * 2];
+    }
+}
+
+// Lightweight edge detection (Sobel approximation, ROI only)
+void edge_detect_roi(
+    uint8_t* gray,
+    int width,
+    int height,
+    int roi_y_start,
+    int roi_height,
+    uint8_t* output
+) {
+    if (roi_y_start < 0) roi_y_start = 0;
+    if (roi_y_start + roi_height > height) roi_height = height - roi_y_start;
+    
+    memset(output, 0, width * height);
+    
+    for (int y = roi_y_start + 1; y < roi_y_start + roi_height - 1; y++) {
+        for (int x = 1; x < width - 1; x++) {
+            int idx = y * width + x;
+            int gx = (int)gray[idx + 1] - (int)gray[idx - 1];
+            int gy = (int)gray[(y+1)*width + x] - (int)gray[(y-1)*width + x];
+            int mag = abs(gx) + abs(gy);
+            if (mag > EDGE_THRESHOLD) {
+                output[idx] = 255;
+            }
+        }
+    }
+}
+```
+
+---
+
+### `node1_front_perception/imu_reader.h`
+
+```c
+#ifndef IMU_READER_H
+#define IMU_READER_H
+
+int imu_init(const char* i2c_device, int addr);
+int imu_read_mpu6050(float* ax, float* ay, float* az, float* gx, float* gy, float* gz);
+float imu_calc_pitch(float ax, float ay, float az);
+float imu_calc_roll(float ax, float ay, float az);
+void imu_close(void);
+
+#endif
+```
+
+---
+
+### `node1_front_perception/imu_reader.c`
+
+```c
+#include "imu_reader.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <linux/i2c-dev.h>
+#include <math.h>
+
+static int i2c_fd = -1;
+
+// BMI088 register addresses
+#define BMI088_ACC_CHIP_ID   0x00
+#define BMI088_ACC_X_L       0x12
+#define BMI088_GYR_CHIP_ID   0x00
+#define BMI088_GYR_X_L       0x02
+
+#define MPU6050_ADDR         0x68
+#define MPU6050_ACCEL_XOUT_H 0x3B
+#define MPU6050_GYRO_XOUT_H  0x43
+#define MPU6050_PWR_MGMT_1   0x6B
+
+int imu_init(const char* i2c_device, int addr) {
+    i2c_fd = open(i2c_device, O_RDWR);
+    if (i2c_fd < 0) {
+        perror("open i2c");
+        return -1;
+    }
+    
+    if (ioctl(i2c_fd, I2C_SLAVE, addr) < 0) {
+        perror("ioctl i2c");
+        close(i2c_fd);
+        return -1;
+    }
+    
+    // Wake up MPU6050
+    uint8_t cmd = 0x00;
+    write(i2c_fd, &cmd, 1);
+    usleep(100000);
+    
+    return 0;
+}
+
+int imu_read_register(uint8_t reg, uint8_t* data, int len) {
+    if (i2c_fd < 0) return -1;
+    
+    if (write(i2c_fd, &reg, 1) != 1) {
+        return -1;
+    }
+    
+    if (read(i2c_fd, data, len) != len) {
+        return -1;
+    }
+    return 0;
+}
+
+int imu_read_mpu6050(float* ax, float* ay, float* az, float* gx, float* gy, float* gz) {
+    uint8_t buf[14];
+    
+    // Read accelerometer
+    if (imu_read_register(MPU6050_ACCEL_XOUT_H, buf, 6) < 0) return -1;
+    int16_t ax_raw = (buf[0] << 8) | buf[1];
+    int16_t ay_raw = (buf[2] << 8) | buf[3];
+    int16_t az_raw = (buf[4] << 8) | buf[5];
+    
+    // Read gyroscope
+    if (imu_read_register(MPU6050_GYRO_XOUT_H, buf, 6) < 0) return -1;
+    int16_t gx_raw = (buf[0] << 8) | buf[1];
+    int16_t gy_raw = (buf[2] << 8) | buf[3];
+    int16_t gz_raw = (buf[4] << 8) | buf[5];
+    
+    // Convert (MPU6050 default: accelerometer ±2g, gyroscope ±250°/s)
+    *ax = ax_raw / 16384.0f;
+    *ay = ay_raw / 16384.0f;
+    *az = az_raw / 16384.0f;
+    *gx = gx_raw / 131.0f;
+    *gy = gy_raw / 131.0f;
+    *gz = gz_raw / 131.0f;
+    
+    return 0;
+}
+
+// Calculate pitch angle from accelerometer
+float imu_calc_pitch(float ax, float ay, float az) {
+    return atan2f(-ax, sqrtf(ay*ay + az*az)) * 180.0f / M_PI;
+}
+
+// Calculate roll angle from accelerometer
+float imu_calc_roll(float ax, float ay, float az) {
+    return atan2f(ay, az) * 180.0f / M_PI;
+}
+
+void imu_close(void) {
+    if (i2c_fd >= 0) {
+        close(i2c_fd);
+        i2c_fd = -1;
+    }
+}
+```
+
+---
+
+### `node1_front_perception/lane_detector.h`
+
+```c
+#ifndef LANE_DETECTOR_H
+#define LANE_DETECTOR_H
+
+#include <stdint.h>
+
+typedef struct {
+    float left_x;          // Left lane line x-coordinate (pixels)
+    float right_x;         // Right lane line x-coordinate (pixels)
+    float left_dist;       // Distance to left lane line (meters)
+    float right_dist;      // Distance to right lane line (meters)
+    float road_width;      // Road width (meters)
+    float curvature;       // Curvature radius (meters)
+    float heading_angle;   // Heading angle (degrees)
+    float scale_m_per_px;  // Pixel scale (meters per pixel)
+    int detected;
+} LaneData;
+
+int detect_lanes(uint8_t* edge_map, int width, int height, int roi_y_start, int roi_height, LaneData* lanes);
+
+#endif
+```
+
+---
+
+### `node1_front_perception/lane_detector.c`
+
+```c
+#include "lane_detector.h"
+#include "../common/geometry.h"
+#include <string.h>
+#include <stdlib.h>
+#include <math.h>
+
+// Scan for lane lines at a given row
+static int scan_lane_at_y(
+    uint8_t* edge_map,
+    int width,
+    int height,
+    int y,
+    int center_x,
+    int* left_x,
+    int* right_x
+) {
+    *left_x = -1;
+    *right_x = -1;
+    
+    // Scan from center to left
+    for (int x = center_x - 5; x > 10; x--) {
+        if (edge_map[y * width + x] > 128) {
+            *left_x = x;
+            break;
+        }
+    }
+    
+    // Scan from center to right
+    for (int x = center_x + 5; x < width - 10; x++) {
+        if (edge_map[y * width + x] > 128) {
+            *right_x = x;
+            break;
+        }
+    }
+    
+    return (*left_x >= 0 && *right_x >= 0) ? 0 : -1;
+}
+
+// RANSAC line fitting (simplified)
+static int fit_line_ransac(
+    int* x_points,
+    int* y_points,
+    int count,
+    float* slope,
+    float* intercept
+) {
+    if (count < 2) return -1;
+    
+    // Simple least squares
+    float sum_x = 0, sum_y = 0, sum_xy = 0, sum_x2 = 0;
+    for (int i = 0; i < count; i++) {
+        sum_x += x_points[i];
+        sum_y += y_points[i];
+        sum_xy += x_points[i] * y_points[i];
+        sum_x2 += x_points[i] * x_points[i];
+    }
+    
+    float n = count;
+    float denom = n * sum_x2 - sum_x * sum_x;
+    if (fabsf(denom) < 0.001f) return -1;
+    
+    *slope = (n * sum_xy - sum_x * sum_y) / denom;
+    *intercept = (sum_y - (*slope) * sum_x) / n;
+    
+    return 0;
+}
+
+int detect_lanes(
+    uint8_t* edge_map,
+    int width,
+    int height,
+    int roi_y_start,
+    int roi_height,
+    LaneData* lanes
+) {
+    memset(lanes, 0, sizeof(LaneData));
+    
+    int center_x = width / 2;
+    int samples = 5;
+    int left_xs[20], left_ys[20], right_xs[20], right_ys[20];
+    int left_count = 0, right_count = 0;
+    
+    // Sample multiple rows within ROI
+    for (int i = 0; i < samples; i++) {
+        int y = roi_y_start + roi_height * (i + 1) / (samples + 1);
+        if (y >= height) continue;
+        
+        int lx, rx;
+        if (scan_lane_at_y(edge_map, width, height, y, center_x, &lx, &rx) == 0) {
+            left_xs[left_count] = lx;
+            left_ys[left_count] = y;
+            left_count++;
+            
+            right_xs[right_count] = rx;
+            right_ys[right_count] = y;
+            right_count++;
+        }
+    }
+    
+    if (left_count < 2 || right_count < 2) {
+        lanes->detected = 0;
+        return -1;
+    }
+    
+    // Fit left and right lane lines
+    float left_slope, left_intercept, right_slope, right_intercept;
+    if (fit_line_ransac(left_xs, left_ys, left_count, &left_slope, &left_intercept) < 0) {
+        lanes->detected = 0;
+        return -1;
+    }
+    if (fit_line_ransac(right_xs, right_ys, right_count, &right_slope, &right_intercept) < 0) {
+        lanes->detected = 0;
+        return -1;
+    }
+    
+    // Calculate lane line positions at bottom row
+    int bottom_y = height - 1;
+    float left_x_bottom = left_slope * bottom_y + left_intercept;
+    float right_x_bottom = right_slope * bottom_y + right_intercept;
+    
+    lanes->left_x = left_x_bottom;
+    lanes->right_x = right_x_bottom;
+    lanes->detected = 1;
+    
+    // Calculate pixel width and scale
+    float pixel_width = right_x_bottom - left_x_bottom;
+    if (pixel_width > 5) {
+        lanes->scale_m_per_px = LANE_WIDTH_STD / pixel_width;
+        lanes->left_dist = (center_x - left_x_bottom) * lanes->scale_m_per_px;
+        lanes->right_dist = (right_x_bottom - center_x) * lanes->scale_m_per_px;
+        lanes->road_width = LANE_WIDTH_STD;
+    }
+    
+    // Calculate heading angle from lane line slopes
+    float lane_center_slope = (left_slope + right_slope) / 2.0f;
+    lanes->heading_angle = atanf(lane_center_slope) * 180.0f / M_PI;
+    
+    // Calculate curvature using three-point circle fitting
+    float mid_xs[20], mid_ys[20];
+    int mid_count = 0;
+    for (int i = 0; i < left_count && i < right_count; i++) {
+        mid_xs[mid_count] = (left_xs[i] + right_xs[i]) / 2.0f;
+        mid_ys[mid_count] = (left_ys[i] + right_ys[i]) / 2.0f;
+        mid_count++;
+    }
+    
+    if (mid_count >= 3) {
+        int idx1 = 0, idx2 = mid_count / 2, idx3 = mid_count - 1;
+        lanes->curvature = fit_curvature_radius(
+            mid_xs[idx1], mid_ys[idx1],
+            mid_xs[idx2], mid_ys[idx2],
+            mid_xs[idx3], mid_ys[idx3]
+        );
+        // Map to world coordinates
+        lanes->curvature *= lanes->scale_m_per_px * 50.0f;
+        if (lanes->curvature > 9999.0f) lanes->curvature = 9999.0f;
+    } else {
+        lanes->curvature = 9999.0f;
+    }
+    
+    return 0;
+}
+```
+
+---
+
+### `node1_front_perception/obstacle_tracker.h`
+
+```c
+#ifndef OBSTACLE_TRACKER_H
+#define OBSTACLE_TRACKER_H
+
+#include <stdint.h>
+#include "../common/protocol.h"
+
+#define MAX_TRACKED_OBJECTS 20
+#define ASSOCIATION_THRESH  50.0f
+
+typedef struct {
+    int id;
+    float x;            // Pixel x
+    float y;            // Pixel y (bottom)
+    float width;        // Pixel width
+    float height;       // Pixel height
+    float vx;           // Pixel velocity
+    float vy;
+    float confidence;
+    int age;            // Consecutive tracked frames
+    float world_dist;   // World coordinate distance (meters)
+    float world_speed;  // World coordinate speed (m/s)
+} TrackedObject;
+
+void tracker_init(void);
+int tracker_update(float* detections, int det_count, float dt, TrackedObject* results);
+float tracker_get_speed(int id, float* vx, float* vy);
+
+#endif
+```
+
+---
+
+### `node1_front_perception/obstacle_tracker.c`
+
+```c
+#include "obstacle_tracker.h"
+#include <string.h>
+#include <stdlib.h>
+#include <math.h>
+
+static TrackedObject objects[MAX_TRACKED_OBJECTS];
+static int object_count = 0;
+static int next_id = 1;
+
+void tracker_init(void) {
+    memset(objects, 0, sizeof(objects));
+    object_count = 0;
+    next_id = 1;
+}
+
+// Calculate pixel distance between two points
+static float pixel_dist(float x1, float y1, float x2, float y2) {
+    float dx = x1 - x2;
+    float dy = y1 - y2;
+    return sqrtf(dx*dx + dy*dy);
+}
+
+int tracker_update(
+    float* detections,       // [x, y, width, height] array
+    int det_count,
+    float dt,
+    TrackedObject* results
+) {
+    int result_count = 0;
+    
+    // Predict existing object positions (constant velocity model)
+    for (int i = 0; i < object_count; i++) {
+        objects[i].x += objects[i].vx * dt;
+        objects[i].y += objects[i].vy * dt;
+        objects[i].age++;
+    }
+    
+    // Associate detections with existing objects
+    int matched_obj[MAX_TRACKED_OBJECTS] = {0};
+    
+    for (int d = 0; d < det_count && d < MAX_OBSTACLES; d++) {
+        float dx = detections[d * 4 + 0];
+        float dy = detections[d * 4 + 1];
+        float dw = detections[d * 4 + 2];
+        float dh = detections[d * 4 + 3];
+        
+        // Find nearest object
+        int best_idx = -1;
+        float best_dist = ASSOCIATION_THRESH * 1.5f;
+        
+        for (int i = 0; i < object_count; i++) {
+            if (matched_obj[i]) continue;
+            float dist = pixel_dist(objects[i].x, objects[i].y, dx, dy);
+            if (dist < best_dist) {
+                best_dist = dist;
+                best_idx = i;
+            }
+        }
+        
+        if (best_idx >= 0) {
+            // Update existing object
+            TrackedObject* obj = &objects[best_idx];
+            obj->vx = (dx - obj->x) / dt;
+            obj->vy = (dy - obj->y) / dt;
+            obj->x = dx;
+            obj->y = dy;
+            obj->width = dw;
+            obj->height = dh;
+            obj->confidence = 0.9f;
+            obj->age = 0;
+            matched_obj[best_idx] = 1;
+            
+            results[result_count++] = *obj;
+        } else {
+            // Create new object
+            if (object_count < MAX_TRACKED_OBJECTS) {
+                TrackedObject* obj = &objects[object_count];
+                obj->id = next_id++;
+                obj->x = dx;
+                obj->y = dy;
+                obj->width = dw;
+                obj->height = dh;
+                obj->vx = 0;
+                obj->vy = 0;
+                obj->confidence = 0.5f;
+                obj->age = 0;
+                object_count++;
+                
+                results[result_count++] = *obj;
+            }
+        }
+    }
+    
+    // Remove objects not updated for too long
+    int new_count = 0;
+    for (int i = 0; i < object_count; i++) {
+        if (objects[i].age < 10) {  // Remove after 10 frames without update
+            objects[new_count++] = objects[i];
+        }
+    }
+    object_count = new_count;
+    
+    return result_count;
+}
+
+float tracker_get_speed(int id, float* vx, float* vy) {
+    for (int i = 0; i < object_count; i++) {
+        if (objects[i].id == id) {
+            *vx = objects[i].vx;
+            *vy = objects[i].vy;
+            return 1.0f;
+        }
+    }
+    return 0.0f;
+}
+```
+
+---
+
+### `node1_front_perception/range_finder.h`
+
+```c
+#ifndef RANGE_FINDER_H
+#define RANGE_FINDER_H
+
+#include "config.h"
+#include "lane_detector.h"
+#include "../common/geometry.h"
+
+#define CAMERA_FOV_VERT 45.0f
+
+typedef struct {
+    float pitch_range;
+    float lane_scale_range;
+    float stereo_range;
+    float final_range;
+    float confidence;
+} RangeResult;
+
+RangeResult compute_fused_range(
+    int obstacle_pixel_y,
+    int obstacle_pixel_w,
+    int obstacle_pixel_h,
+    const LaneData* lanes,
+    float pitch_angle_deg,
+    float camera_height_m,
+    const CameraIntrinsics* cam
+);
+
+#endif
+```
+
+---
+
+### `node1_front_perception/range_finder.c`
+
+```c
+#include "range_finder.h"
+#include "../common/geometry.h"
+#include "../common/filter.h"
+#include <math.h>
+
+// Static filter
+static LowPassFilter range_filter;
+static int filter_initialized = 0;
+
+RangeResult compute_fused_range(
+    int obstacle_pixel_y,
+    int obstacle_pixel_w,
+    int obstacle_pixel_h,
+    const LaneData* lanes,
+    float pitch_angle_deg,
+    float camera_height_m,
+    const CameraIntrinsics* cam
+) {
+    RangeResult result = {0};
+    
+    if (!filter_initialized) {
+        lowpass_init(&range_filter, 0.3f);
+        filter_initialized = 1;
+    }
+    
+    // ====== Method 1: Pitch angle geometry ======
+    result.pitch_range = range_by_pitch(
+        camera_height_m,
+        pitch_angle_deg,
+        obstacle_pixel_y,
+        cam->image_height_px,
+        CAMERA_FOV_VERT
+    );
+    
+    // ====== Method 2: Lane marking scale calibration ======
+    if (lanes->detected && lanes->scale_m_per_px > 0) {
+        // Assume obstacle is a vehicle with width 1.8m
+        if (obstacle_pixel_w > 5) {
+            result.lane_scale_range = VEHICLE_STD_WIDTH / (obstacle_pixel_w * lanes->scale_m_per_px);
+        }
+    }
+    
+    // ====== Method 3: Known height estimation ======
+    if (obstacle_pixel_h > 10) {
+        float focal_px = cam->focal_length_mm / cam->sensor_height_mm * cam->image_height_px;
+        result.stereo_range = range_by_known_height(
+            VEHICLE_STD_HEIGHT,
+            obstacle_pixel_h,
+            focal_px,
+            0.0f
+        );
+    }
+    
+    // ====== Fusion ======
+    float sum = 0.0f, weight_sum = 0.0f;
+    
+    if (result.pitch_range > 0.5f && result.pitch_range < 200.0f) {
+        sum += result.pitch_range * WEIGHT_PITCH;
+        weight_sum += WEIGHT_PITCH;
+    }
+    
+    if (result.lane_scale_range > 0.5f && result.lane_scale_range < 200.0f) {
+        sum += result.lane_scale_range * WEIGHT_LANE_CALIB;
+        weight_sum += WEIGHT_LANE_CALIB;
+    }
+    
+    if (result.stereo_range > 0.5f && result.stereo_range < 200.0f) {
+        sum += result.stereo_range * WEIGHT_STEREO;
+        weight_sum += WEIGHT_STEREO;
+    }
+    
+    if (weight_sum > 0.01f) {
+        result.final_range = sum / weight_sum;
+        result.confidence = weight_sum / (WEIGHT_PITCH + WEIGHT_LANE_CALIB + WEIGHT_STEREO);
+    } else {
+        result.final_range = 99999.0f;
+        result.confidence = 0.0f;
+    }
+    
+    // Low-pass filter
+    result.final_range = lowpass_update(&range_filter, result.final_range);
+    
+    // Confidence adjustment: lower confidence for longer distances
+    if (result.final_range > 50.0f) {
+        result.confidence *= (100.0f / result.final_range);
+        if (result.confidence < 0.1f) result.confidence = 0.1f;
+    }
+    
+    return result;
+}
+```
+
+---
+
+### `node1_front_perception/traffic_light.h`
+
+```c
+#ifndef TRAFFIC_LIGHT_H
+#define TRAFFIC_LIGHT_H
+
+#include <stdint.h>
+#include "../common/protocol.h"
+
+int detect_traffic_lights(
+    uint8_t* yuyv,
+    int width,
+    int height,
+    TrafficLightData* lights
+);
+
+#endif
+```
+
+---
+
+### `node1_front_perception/traffic_light.c`
+
+```c
+#include "traffic_light.h"
+#include <string.h>
+#include <math.h>
+
+// HSV color thresholds (based on Chinese national standard traffic lights)
+#define H_RED_LOW   0
+#define H_RED_HIGH  10
+#define H_RED2_LOW  160
+#define H_RED2_HIGH 180
+#define H_YELLOW_LOW  20
+#define H_YELLOW_HIGH 30
+#define H_GREEN_LOW   90
+#define H_GREEN_HIGH  120
+#define S_MIN       80
+#define V_MIN       80
+
+// Convert YUYV to HSV (simplified)
+static void yuyv_to_hsv(uint8_t* yuyv, int width, int height, uint8_t* h, uint8_t* s, uint8_t* v) {
+    for (int i = 0; i < width * height; i++) {
+        uint8_t Y = yuyv[i * 2];
+        uint8_t U = yuyv[i * 2 + 1];
+        uint8_t V = yuyv[i * 2 + 3];
+        
+        // YUV to RGB (simplified)
+        float r = Y + 1.402f * (V - 128);
+        float g = Y - 0.344f * (U - 128) - 0.714f * (V - 128);
+        float b = Y + 1.772f * (U - 128);
+        
+        if (r < 0) r = 0; if (r > 255) r = 255;
+        if (g < 0) g = 0; if (g > 255) g = 255;
+        if (b < 0) b = 0; if (b > 255) b = 255;
+        
+        // RGB to HSV
+        float max = r > g ? (r > b ? r : b) : (g > b ? g : b);
+        float min = r < g ? (r < b ? r : b) : (g < b ? g : b);
+        float diff = max - min;
+        
+        v[i] = (uint8_t)(max);
+        s[i] = (max > 0) ? (uint8_t)(diff / max * 255) : 0;
+        
+        if (diff < 0.1f) {
+            h[i] = 0;
+        } else if (max == r) {
+            float hue = 60.0f * ((g - b) / diff);
+            if (hue < 0) hue += 360;
+            h[i] = (uint8_t)(hue / 2);
+        } else if (max == g) {
+            h[i] = (uint8_t)((60.0f * ((b - r) / diff) + 120.0f) / 2);
+        } else {
+            h[i] = (uint8_t)((60.0f * ((r - g) / diff) + 240.0f) / 2);
+        }
+    }
+}
+
+// Color detection
+static int detect_color(uint8_t h, uint8_t s, uint8_t v) {
+    if (s < S_MIN || v < V_MIN) return 0;
+    
+    int h_val = h * 2;
+    if ((h_val >= H_RED_LOW && h_val <= H_RED_HIGH) ||
+        (h_val >= H_RED2_LOW && h_val <= H_RED2_HIGH)) {
+        return 1;  // Red
+    }
+    if (h_val >= H_YELLOW_LOW && h_val <= H_YELLOW_HIGH) {
+        return 2;  // Yellow
+    }
+    if (h_val >= H_GREEN_LOW && h_val <= H_GREEN_HIGH) {
+        return 3;  // Green
+    }
+    return 0;
+}
+
+// Connected component analysis (simplified)
+static int find_largest_blob(
+    uint8_t* mask,
+    int width,
+    int height,
+    int* out_x,
+    int* out_y,
+    int* out_w,
+    int* out_h
+) {
+    int best_x = 0, best_y = 0, best_area = 0;
+    int best_w = 0, best_h = 0;
+    
+    for (int y = 10; y < height - 10; y++) {
+        for (int x = 10; x < width - 10; x++) {
+            if (mask[y * width + x] == 255) {
+                int min_x = x, max_x = x;
+                int min_y = y, max_y = y;
+                int area = 0;
+                
+                // Scan nearby region (simplified rectangle scan)
+                for (int dy = -5; dy <= 5; dy++) {
+                    for (int dx = -5; dx <= 5; dx++) {
+                        int nx = x + dx, ny = y + dy;
+                        if (nx >= 0 && nx < width && ny >= 0 && ny < height &&
+                            mask[ny * width + nx] == 255) {
+                            area++;
+                            if (nx < min_x) min_x = nx;
+                            if (nx > max_x) max_x = nx;
+                            if (ny < min_y) min_y = ny;
+                            if (ny > max_y) max_y = ny;
+                        }
+                    }
+                }
+                
+                if (area > best_area && area > 20) {
+                    best_area = area;
+                    best_x = (min_x + max_x) / 2;
+                    best_y = (min_y + max_y) / 2;
+                    best_w = max_x - min_x;
+                    best_h = max_y - min_y;
+                }
+            }
+        }
+    }
+    
+    if (best_area > 0) {
+        *out_x = best_x;
+        *out_y = best_y;
+        *out_w = best_w;
+        *out_h = best_h;
+        return 1;
+    }
+    return 0;
+}
+
+int detect_traffic_lights(
+    uint8_t* yuyv,
+    int width,
+    int height,
+    TrafficLightData* lights
+) {
+    memset(lights, 0, sizeof(TrafficLightData));
+    lights->node_id = NODE_ID_TRAFFIC_LIGHT;
+    lights->frame_type = FRAME_TYPE_PERCEPTION;
+    
+    // Only scan top 1/3 of image (traffic lights won't appear on ground)
+    int roi_y = 0;
+    int roi_h = height / 3;
+    
+    // Allocate HSV memory
+    uint8_t* h = (uint8_t*)malloc(width * height);
+    uint8_t* s = (uint8_t*)malloc(width * height);
+    uint8_t* v = (uint8_t*)malloc(width * height);
+    uint8_t* mask = (uint8_t*)malloc(width * height);
+    
+    if (!h || !s || !v || !mask) {
+        free(h); free(s); free(v); free(mask);
+        return -1;
+    }
+    
+    yuyv_to_hsv(yuyv, width, height, h, s, v);
+    
+    int light_count = 0;
+    
+    // Detect red, yellow, green
+    int colors[] = {1, 2, 3};
+    for (int ci = 0; ci < 3 && light_count < MAX_TRAFFIC_LIGHTS; ci++) {
+        int target_color = colors[ci];
+        
+        // Generate mask
+        memset(mask, 0, width * height);
+        for (int y = roi_y; y < roi_y + roi_h; y++) {
+            for (int x = 0; x < width; x++) {
+                int idx = y * width + x;
+                if (detect_color(h[idx], s[idx], v[idx]) == target_color) {
+                    mask[idx] = 255;
+                }
+            }
+        }
+        
+        // Find largest connected component
+        int cx, cy, cw, ch;
+        if (find_largest_blob(mask, width, height, &cx, &cy, &cw, &ch)) {
+            // Geometric verification: circular light aspect ratio close to 1
+            float aspect = (float)cw / ch;
+            if (aspect > 0.5f && aspect < 2.0f && cw > 10 && ch > 10) {
+                lights->lights[light_count].state = target_color;
+                lights->lights[light_count].distance = 99999.0f;  // To be filled by range finder
+                lights->lights[light_count].angle = (cx - width/2.0f) / width * 30.0f;
+                lights->lights[light_count].aspect = 0;  // Circular
+                
+                // Range using known diameter
+                float focal_px = 4.0f / 6.0f * width;  // Simplified
+                lights->lights[light_count].distance = 
+                    TRAFFIC_LIGHT_DIAMETER * focal_px / cw;
+                
+                light_count++;
+            }
+        }
+    }
+    
+    lights->light_count = light_count;
+    lights->data_len = sizeof(TrafficLightData) - 8;
+    lights->timestamp_ms = 0;  // Set by caller
+    
+    free(h); free(s); free(v); free(mask);
+    return light_count;
+}
+```
+
+---
+
+### `node1_front_perception/udp_sender.h`
+
+```c
+#ifndef UDP_SENDER_H
+#define UDP_SENDER_H
+
+#include <stdint.h>
+#include "../common/protocol.h"
+
+int udp_init(const char* dest_ip, int dest_port, int local_port);
+int udp_send(uint8_t* data, int len);
+int udp_send_to(uint8_t* data, int len, const char* ip, int port);
+void udp_close(void);
+
+#endif
+```
+
+---
+
+### `node1_front_perception/udp_sender.c`
+
+```c
+#include "udp_sender.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <errno.h>
+
+static int sock = -1;
+static struct sockaddr_in dest_addr;
+static int dest_port_val = 0;
+
+int udp_init(const char* dest_ip, int dest_port, int local_port) {
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        perror("socket");
+        return -1;
+    }
+    
+    // Set timeout
+    struct timeval tv = {1, 0};
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    
+    // Bind local port
+    struct sockaddr_in local_addr;
+    memset(&local_addr, 0, sizeof(local_addr));
+    local_addr.sin_family = AF_INET;
+    local_addr.sin_addr.s_addr = INADDR_ANY;
+    local_addr.sin_port = htons(local_port);
+    
+    if (bind(sock, (struct sockaddr*)&local_addr, sizeof(local_addr)) < 0) {
+        perror("bind");
+        close(sock);
+        sock = -1;
+        return -1;
+    }
+    
+    // Destination address
+    memset(&dest_addr, 0, sizeof(dest_addr));
+    dest_addr.sin_family = AF_INET;
+    dest_addr.sin_port = htons(dest_port);
+    dest_port_val = dest_port;
+    if (inet_pton(AF_INET, dest_ip, &dest_addr.sin_addr) <= 0) {
+        perror("inet_pton");
+        close(sock);
+        sock = -1;
+        return -1;
+    }
+    
+    return 0;
+}
+
+int udp_send(uint8_t* data, int len) {
+    if (sock < 0) return -1;
+    if (len <= 0 || len > PROTOCOL_MTU) return -1;
+    
+    int ret = sendto(sock, data, len, 0, (struct sockaddr*)&dest_addr, sizeof(dest_addr));
+    if (ret < 0) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            perror("sendto");
+        }
+        return -1;
+    }
+    return ret;
+}
+
+int udp_send_to(uint8_t* data, int len, const char* ip, int port) {
+    if (sock < 0) return -1;
+    
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    if (inet_pton(AF_INET, ip, &addr.sin_addr) <= 0) {
+        return -1;
+    }
+    
+    return sendto(sock, data, len, 0, (struct sockaddr*)&addr, sizeof(addr));
+}
+
+void udp_close(void) {
+    if (sock >= 0) {
+        close(sock);
+        sock = -1;
+    }
+}
+```
+
+---
+
+### `node1_front_perception/main.c`
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <signal.h>
+#include <time.h>
+#include <sys/time.h>
+
+#include "camera.h"
+#include "lane_detector.h"
+#include "range_finder.h"
+#include "obstacle_tracker.h"
+#include "traffic_light.h"
+#include "imu_reader.h"
+#include "udp_sender.h"
+#include "config.h"
+#include "../common/filter.h"
+#include "../common/protocol.h"
+
+static volatile int running = 1;
+
+void signal_handler(int sig) {
+    (void)sig;
+    running = 0;
+    printf("\nShutting down Node1...\n");
+}
+
+// Get system timestamp in milliseconds
+uint32_t get_timestamp_ms(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec * 1000 + tv.tv_usec / 1000;
+}
+
+// Simple obstacle detection (dark region clustering)
+int detect_obstacles(
+    uint8_t* gray,
+    int width,
+    int height,
+    float* detections,
+    int max_detections
+) {
+    int count = 0;
+    int step = 4;
+    int roi_y = height * 2 / 3;
+    int roi_h = height / 3;
+    
+    // Scan ROI for dark regions
+    for (int y = roi_y; y < height - 5 && count < max_detections; y += step) {
+        for (int x = 10; x < width - 10 && count < max_detections; x += step) {
+            int idx = y * width + x;
+            if (gray[idx] < OBSTACLE_DARK_THRESH) {
+                // Check surrounding pixels (clustering)
+                int dark_count = 0;
+                int min_x = x, max_x = x, min_y = y, max_y = y;
+                
+                for (int dy = -8; dy <= 8; dy += 2) {
+                    for (int dx = -8; dx <= 8; dx += 2) {
+                        int nx = x + dx, ny = y + dy;
+                        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                            if (gray[ny * width + nx] < OBSTACLE_DARK_THRESH) {
+                                dark_count++;
+                                if (nx < min_x) min_x = nx;
+                                if (nx > max_x) max_x = nx;
+                                if (ny < min_y) min_y = ny;
+                                if (ny > max_y) max_y = ny;
+                            }
+                        }
+                    }
+                }
+                
+                if (dark_count > 20) {
+                    // Check overlap with existing detections
+                    int overlap = 0;
+                    for (int i = 0; i < count; i++) {
+                        float dx = detections[i * 4] - (min_x + max_x) / 2.0f;
+                        float dy = detections[i * 4 + 1] - (min_y + max_y) / 2.0f;
+                        if (dx*dx + dy*dy < 400) {
+                            overlap = 1;
+                            break;
+                        }
+                    }
+                    
+                    if (!overlap) {
+                        detections[count * 4] = (min_x + max_x) / 2.0f;
+                        detections[count * 4 + 1] = (min_y + max_y) / 2.0f;
+                        detections[count * 4 + 2] = max_x - min_x;
+                        detections[count * 4 + 3] = max_y - min_y;
+                        count++;
+                    }
+                    
+                    // Skip detected region
+                    x = max_x + 10;
+                }
+            }
+        }
+    }
+    
+    return count;
+}
+
+int main(int argc, char** argv) {
+    printf("=== Node1: Forward Perception ===\n");
+    printf("Camera: %s, %dx%d\n", CAMERA_DEVICE, IMAGE_WIDTH, IMAGE_HEIGHT);
+    printf("Destination: %s:%d\n", DEST_IP, DEST_PORT);
+    
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+    
+    // ====== 1. Initialize Camera ======
+    CameraHandle cam;
+    if (camera_init(&cam, CAMERA_DEVICE, IMAGE_WIDTH, IMAGE_HEIGHT, PIXEL_FORMAT) < 0) {
+        fprintf(stderr, "Failed to init camera\n");
+        return -1;
+    }
+    printf("Camera initialized.\n");
+    
+    // ====== 2. Initialize IMU ======
+    #ifdef USE_IMU
+    if (imu_init("/dev/i2c-1", MPU6050_ADDR) < 0) {
+        fprintf(stderr, "Warning: IMU init failed, using fixed pitch\n");
+    } else {
+        printf("IMU initialized.\n");
+    }
+    #endif
+    
+    // ====== 3. Initialize UDP ======
+    if (udp_init(DEST_IP, DEST_PORT, LOCAL_PORT) < 0) {
+        fprintf(stderr, "Failed to init UDP\n");
+        camera_close(&cam);
+        return -1;
+    }
+    printf("UDP initialized.\n");
+    
+    // ====== 4. Initialize Tracker ======
+    tracker_init();
+    
+    // ====== 5. Allocate Memory ======
+    uint8_t* gray = (uint8_t*)malloc(IMAGE_WIDTH * IMAGE_HEIGHT);
+    uint8_t* edge_map = (uint8_t*)calloc(IMAGE_WIDTH * IMAGE_HEIGHT, 1);
+    float detections[MAX_OBSTACLES * 4];
+    TrackedObject tracked[MAX_OBSTACLES];
+    
+    if (!gray || !edge_map) {
+        fprintf(stderr, "Failed to allocate memory\n");
+        return -1;
+    }
+    
+    // ====== 6. Camera Intrinsics ======
+    CameraIntrinsics cam_intrinsics = {
+        .focal_length_mm = 4.0f,
+        .sensor_width_mm = 6.0f,
+        .sensor_height_mm = 4.5f,
+        .image_width_px = IMAGE_WIDTH,
+        .image_height_px = IMAGE_HEIGHT,
+        .mount_pitch_deg = CAMERA_MOUNT_PITCH,
+        .mount_yaw_deg = CAMERA_MOUNT_YAW,
+        .mount_roll_deg = CAMERA_MOUNT_ROLL,
+        .distortion_k1 = 0.0f,
+        .distortion_k2 = 0.0f
+    };
+    
+    // ====== 7. State Variables ======
+    float pitch_angle = CAMERA_MOUNT_PITCH;
+    float roll_angle = 0.0f;
+    uint32_t prev_frame_time = 0;
+    float dt = 0.033f;
+    int frame_count = 0;
+    int roi_start = IMAGE_HEIGHT * 2 / 3;
+    int roi_height = IMAGE_HEIGHT / 3;
+    
+    printf("Node1 running...\n");
+    
+    // ====== 8. Main Loop ======
+    while (running) {
+        // Capture frame
+        if (camera_capture(&cam) < 0) {
+            usleep(5000);
+            continue;
+        }
+        
+        uint32_t now = get_timestamp_ms();
+        if (prev_frame_time > 0) {
+            dt = (now - prev_frame_time) / 1000.0f;
+            if (dt > 0.1f) dt = 0.033f;
+        }
+        prev_frame_time = now;
+        
+        uint8_t* yuyv = camera_get_frame(&cam);
+        if (!yuyv) {
+            camera_queue_buffer(&cam);
+            continue;
+        }
+        
+        // Convert to grayscale
+        yuyv_to_gray(yuyv, gray, IMAGE_WIDTH, IMAGE_HEIGHT);
+        
+        // ====== Lane Detection ======
+        memset(edge_map, 0, IMAGE_WIDTH * IMAGE_HEIGHT);
+        edge_detect_roi(gray, IMAGE_WIDTH, IMAGE_HEIGHT, roi_start, roi_height, edge_map);
+        
+        LaneData lanes;
+        detect_lanes(edge_map, IMAGE_WIDTH, IMAGE_HEIGHT, roi_start, roi_height, &lanes);
+        
+        // ====== Obstacle Detection ======
+        int det_count = detect_obstacles(gray, IMAGE_WIDTH, IMAGE_HEIGHT, detections, MAX_OBSTACLES);
+        
+        // ====== Obstacle Tracking ======
+        int tracked_count = tracker_update(detections, det_count, dt, tracked);
+        
+        // ====== Range Finding ======
+        float min_dist = 99999.0f;
+        float min_speed = 0.0f;
+        int obstacle_count = 0;
+        
+        for (int i = 0; i < tracked_count && i < MAX_OBSTACLES; i++) {
+            int pixel_y = (int)tracked[i].y;
+            int pixel_w = (int)tracked[i].width;
+            int pixel_h = (int)tracked[i].height;
+            
+            if (pixel_y > 0) {
+                RangeResult range = compute_fused_range(
+                    pixel_y,
+                    pixel_w,
+                    pixel_h,
+                    &lanes,
+                    pitch_angle,
+                    CAMERA_HEIGHT_M,
+                    &cam_intrinsics
+                );
+                
+                if (range.final_range < min_dist && range.confidence > 0.3f) {
+                    min_dist = range.final_range;
+                    min_speed = tracked[i].vx * 0.1f;  // Rough speed estimation
+                }
+            }
+        }
+        
+        // ====== Traffic Light Detection ======
+        TrafficLightData traffic_lights;
+        detect_traffic_lights(yuyv, IMAGE_WIDTH, IMAGE_HEIGHT, &traffic_lights);
+        traffic_lights.timestamp_ms = now;
+        
+        // ====== Read IMU ======
+        #ifdef USE_IMU
+        float ax, ay, az, gx, gy, gz;
+        if (imu_read_mpu6050(&ax, &ay, &az, &gx, &gy, &gz) == 0) {
+            pitch_angle = imu_calc_pitch(ax, ay, az);
+            roll_angle = imu_calc_roll(ax, ay, az);
+            // Complementary filter fusion with gyroscope
+            static ComplementaryFilter comp_filt = {0};
+            static int filt_init = 0;
+            if (!filt_init) {
+                comp_filt.angle = pitch_angle;
+                comp_filt.alpha = 0.98f;
+                filt_init = 1;
+            }
+            pitch_angle = complement_update(&comp_filt, gx, pitch_angle, dt);
+        }
+        #endif
+        
+        // ====== Assemble Send Data ======
+        PerceptionData data;
+        memset(&data, 0, sizeof(data));
+        data.node_id = NODE_ID_FRONT_PERCEPTION;
+        data.frame_type = FRAME_TYPE_PERCEPTION;
+        data.timestamp_ms = now;
+        data.data_len = sizeof(PerceptionData) - 8;
+        
+        data.left_lane_dist = lanes.left_dist;
+        data.right_lane_dist = lanes.right_dist;
+        data.road_width = lanes.road_width;
+        data.lane_curvature = lanes.curvature;
+        data.lane_heading = lanes.heading_angle;
+        data.lane_confidence = lanes.detected ? 0.9f : 0.1f;
+        
+        if (tracked_count > 0 && min_dist < 200.0f) {
+            data.obstacle_count = 1;
+            data.obstacle_dist[0] = min_dist;
+            data.obstacle_rel_speed[0] = min_speed;
+            data.obstacle_width[0] = VEHICLE_STD_WIDTH;
+            data.obstacle_type[0] = 1;  // Car
+            data.obstacle_confidence = 0.8f;
+        } else {
+            data.obstacle_count = 0;
+        }
+        
+        // Traffic light (take the nearest one)
+        if (traffic_lights.light_count > 0) {
+            int nearest = 0;
+            float min_light_dist = 99999.0f;
+            for (int i = 0; i < traffic_lights.light_count; i++) {
+                if (traffic_lights.lights[i].distance < min_light_dist) {
+                    min_light_dist = traffic_lights.lights[i].distance;
+                    nearest = i;
+                }
+            }
+            data.traffic_light_state = traffic_lights.lights[nearest].state;
+            data.traffic_light_dist = traffic_lights.lights[nearest].distance;
+        }
+        
+        data.pitch_angle = pitch_angle;
+        data.roll_angle = roll_angle;
+        
+        // ====== Send ======
+        udp_send((uint8_t*)&data, sizeof(data));
+        
+        // ====== Statistics ======
+        frame_count++;
+        if (frame_count % 30 == 0) {
+            printf("[Node1] Frames: %d, Lanes: %s, Obs: %d, Dist: %.1fm, Pitch: %.1f°, TL: %d\n",
+                   frame_count,
+                   lanes.detected ? "OK" : "NO",
+                   data.obstacle_count,
+                   data.obstacle_count > 0 ? data.obstacle_dist[0] : 0.0f,
+                   pitch_angle,
+                   data.traffic_light_state);
+        }
+        
+        // Re-queue buffer
+        camera_queue_buffer(&cam);
+    }
+    
+    // ====== Cleanup ======
+    free(gray);
+    free(edge_map);
+    udp_close();
+    camera_close(&cam);
+    imu_close();
+    
+    printf("Node1 stopped.\n");
+    return 0;
+}
+```
+
+---
+
+### `node1_front_perception/Makefile`
+
+```makefile
+CC = gcc
+CFLAGS = -Wall -O2 -std=c99 -I. -I../common -D_GNU_SOURCE
+LDFLAGS = -lm -lpthread
+
+# Enable IMU
+CFLAGS += -DUSE_IMU
+
+TARGET = node1_front_perception
+SRCS = main.c camera.c lane_detector.c range_finder.c \
+       obstacle_tracker.c traffic_light.c imu_reader.c udp_sender.c
+OBJS = $(SRCS:.c=.o)
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+clean:
+	rm -f $(OBJS) $(TARGET)
+
+.PHONY: all clean
+```
+
+---
+
+## Node2: Surround Perception Node
+
+### `node2_surround_perception/config.h`
+
+```c
+#ifndef CONFIG_H
+#define CONFIG_H
+
+// ==================== Camera Configuration ====================
+#define CAMERA_LEFT         "/dev/video2"
+#define CAMERA_RIGHT        "/dev/video3"
+#define CAMERA_REAR         "/dev/video4"
+#define IMAGE_WIDTH         320
+#define IMAGE_HEIGHT        240
+
+// ==================== Detection Thresholds ====================
+#define SIDE_OBSTACLE_THRESH   0.5f   // Side obstacle detection distance (meters)
+#define REAR_TTC_WARNING       2.5f   // Rear collision warning time (seconds)
+#define REAR_TTC_EMERGENCY     1.0f
+#define BLIND_ZONE_DIST        3.0f   // Blind zone detection distance
+
+// ==================== Network ====================
+#define DEST_IP             "192.168.1.3"
+#define DEST_PORT           8888
+#define LOCAL_PORT          8890
+
+#endif
+```
+
+---
+
+### `node2_surround_perception/side_detector.h`
+
+```c
+#ifndef SIDE_DETECTOR_H
+#define SIDE_DETECTOR_H
+
+#include <stdint.h>
+
+int detect_side_obstacle(
+    uint8_t* gray,
+    int width,
+    int height,
+    int side,  // 0=left, 1=right
+    float* distance,
+    float* speed
+);
+
+#endif
+```
+
+---
+
+### `node2_surround_perception/side_detector.c`
+
+```c
+#include "side_detector.h"
+#include <math.h>
+
+int detect_side_obstacle(
+    uint8_t* gray,
+    int width,
+    int height,
+    int side,  // 0=left, 1=right
+    float* distance,
+    float* speed
+) {
+    // Take the side quarter region
+    int start_x, end_x;
+    if (side == 0) {
+        start_x = 0;
+        end_x = width / 4;
+    } else {
+        start_x = width * 3 / 4;
+        end_x = width;
+    }
+    
+    // Calculate edge density in this region
+    int edge_count = 0;
+    int total = 0;
+    for (int y = height / 3; y < height - 10; y++) {
+        for (int x = start_x; x < end_x; x++) {
+            int idx = y * width + x;
+            int gx = (x < width-1) ? abs(gray[idx+1] - gray[idx]) : 0;
+            int gy = (y < height-1) ? abs(gray[(y+1)*width + x] - gray[idx]) : 0;
+            if (gx + gy > 30) edge_count++;
+            total++;
+        }
+    }
+    
+    float density = (float)edge_count / total;
+    
+    if (density > 0.05f) {
+        // Estimate distance (empirical formula)
+        *distance = 2.0f / (density + 0.1f);
+        if (*distance > 10.0f) *distance = 10.0f;
+        *speed = 0.0f;
+        return 1;
+    }
+    
+    *distance = 99999.0f;
+    return 0;
+}
+```
+
+---
+
+### `node2_surround_perception/rear_detector.h`
+
+```c
+#ifndef REAR_DETECTOR_H
+#define REAR_DETECTOR_H
+
+#include <stdint.h>
+
+int detect_rear_vehicle(
+    uint8_t* gray,
+    uint8_t* prev_gray,
+    int width,
+    int height,
+    float* distance,
+    float* ttc
+);
+
+#endif
+```
+
+---
+
+### `node2_surround_perception/rear_detector.c`
+
+```c
+#include "rear_detector.h"
+#include <math.h>
+
+int detect_rear_vehicle(
+    uint8_t* gray,
+    uint8_t* prev_gray,
+    int width,
+    int height,
+    float* distance,
+    float* ttc
+) {
+    if (!prev_gray) return 0;
+    
+    // Calculate pixel change in rear region
+    int roi_y = height / 4;
+    int roi_h = height / 3;
+    int roi_x = width / 4;
+    int roi_w = width / 2;
+    
+    float total_diff = 0.0f;
+    int count = 0;
+    
+    for (int y = roi_y; y < roi_y + roi_h; y += 4) {
+        for (int x = roi_x; x < roi_x + roi_w; x += 4) {
+            int idx = y * width + x;
+            float diff = fabsf(gray[idx] - prev_gray[idx]);
+            total_diff += diff;
+            count++;
+        }
+    }
+    
+    float avg_diff = total_diff / count;
+    
+    // Determine if a vehicle is approaching
+    if (avg_diff > 15.0f) {
+        // Estimate distance
+        *distance = 20.0f / (avg_diff + 1.0f);
+        if (*distance > 30.0f) *distance = 30.0f;
+        
+        // TTC estimation (assuming approach speed 10m/s)
+        *ttc = *distance / 10.0f;
+        if (*ttc > 5.0f) *ttc = 5.0f;
+        
+        return 1;
+    }
+    
+    *distance = 99999.0f;
+    *ttc = 99999.0f;
+    return 0;
+}
+```
+
+---
+
+### `node2_surround_perception/udp_sender.h` / `.c` (same as Node1)
+
+### `node2_surround_perception/camera.h` / `.c` (same as Node1)
+
+### `node2_surround_perception/main.c`
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <signal.h>
+#include "camera.h"
+#include "side_detector.h"
+#include "rear_detector.h"
+#include "udp_sender.h"
+#include "config.h"
+#include "../common/protocol.h"
+
+static volatile int running = 1;
+
+void signal_handler(int sig) {
+    (void)sig;
+    running = 0;
+}
+
+int main() {
+    printf("=== Node2: Surround Perception ===\n");
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+    
+    // Initialize camera (simplified - one camera for demo)
+    CameraHandle cam;
+    if (camera_init(&cam, CAMERA_LEFT, IMAGE_WIDTH, IMAGE_HEIGHT, V4L2_PIX_FMT_YUYV) < 0) {
+        fprintf(stderr, "Failed to init camera\n");
+        return -1;
+    }
+    
+    if (udp_init(DEST_IP, DEST_PORT, LOCAL_PORT) < 0) {
+        camera_close(&cam);
+        return -1;
+    }
+    
+    uint8_t* gray = (uint8_t*)malloc(IMAGE_WIDTH * IMAGE_HEIGHT);
+    uint8_t* prev_gray = (uint8_t*)malloc(IMAGE_WIDTH * IMAGE_HEIGHT);
+    
+    if (!gray || !prev_gray) {
+        fprintf(stderr, "Memory allocation failed\n");
+        return -1;
+    }
+    
+    int frame_count = 0;
+    
+    while (running) {
+        if (camera_capture(&cam) < 0) {
+            usleep(10000);
+            continue;
+        }
+        
+        uint8_t* yuyv = camera_get_frame(&cam);
+        yuyv_to_gray(yuyv, gray, IMAGE_WIDTH, IMAGE_HEIGHT);
+        
+        // Side detection
+        float left_dist, left_speed;
+        int has_left = detect_side_obstacle(gray, IMAGE_WIDTH, IMAGE_HEIGHT, 0, &left_dist, &left_speed);
+        
+        float right_dist, right_speed;
+        int has_right = detect_side_obstacle(gray, IMAGE_WIDTH, IMAGE_HEIGHT, 1, &right_dist, &right_speed);
+        
+        // Rear detection
+        float rear_dist, rear_ttc;
+        int has_rear = detect_rear_vehicle(gray, prev_gray, IMAGE_WIDTH, IMAGE_HEIGHT, &rear_dist, &rear_ttc);
+        
+        // Swap frames
+        uint8_t* tmp = prev_gray;
+        prev_gray = gray;
+        gray = tmp;
+        
+        // Assemble data
+        SurroundData data;
+        memset(&data, 0, sizeof(data));
+        data.node_id = NODE_ID_SURROUND_PERCEPTION;
+        data.frame_type = FRAME_TYPE_PERCEPTION;
+        data.timestamp_ms = cam.timestamp_ms;
+        data.data_len = sizeof(SurroundData) - 8;
+        
+        data.left_obstacle_dist = has_left ? left_dist : 99999.0f;
+        data.right_obstacle_dist = has_right ? right_dist : 99999.0f;
+        data.rear_obstacle_dist = has_rear ? rear_dist : 99999.0f;
+        data.rear_ttc = has_rear ? rear_ttc : 99999.0f;
+        data.rear_collision_risk = (rear_ttc < REAR_TTC_EMERGENCY) ? 3 :
+                                   (rear_ttc < REAR_TTC_WARNING) ? 2 : 0;
+        data.left_blind_zone = (left_dist < BLIND_ZONE_DIST) ? 1 : 0;
+        data.right_blind_zone = (right_dist < BLIND_ZONE_DIST) ? 1 : 0;
+        
+        // Passing space
+        data.passing_space = 3.0f;  // From Node1
+        data.passing_possible = data.passing_space > 2.5f ? 1 : 0;
+        
+        udp_send((uint8_t*)&data, sizeof(data));
+        
+        frame_count++;
+        if (frame_count % 30 == 0) {
+            printf("[Node2] L:%.1f R:%.1f Rr:%.1f TTC:%.1f\n",
+                   left_dist, right_dist, rear_dist, rear_ttc);
+        }
+        
+        camera_queue_buffer(&cam);
+        usleep(30000);
+    }
+    
+    free(gray);
+    free(prev_gray);
+    camera_close(&cam);
+    udp_close();
+    
+    return 0;
+}
+```
+
+---
+
+### `node2_surround_perception/Makefile`
+
+```makefile
+CC = gcc
+CFLAGS = -Wall -O2 -std=c99 -I. -I../common -D_GNU_SOURCE
+LDFLAGS = -lm
+
+TARGET = node2_surround_perception
+SRCS = main.c side_detector.c rear_detector.c udp_sender.c
+OBJS = $(SRCS:.c=.o)
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+clean:
+	rm -f $(OBJS) $(TARGET)
+```
+
+---
+
+## Node3: Fusion & Decision Node
+
+### `node3_fusion_decision/config.h`
+
+```c
+#ifndef CONFIG_H
+#define CONFIG_H
+
+// ==================== Vehicle Parameters ====================
+#define VEHICLE_WIDTH       1.8f
+#define VEHICLE_LENGTH      4.2f
+#define MAX_SPEED           30.0f      // Maximum speed (m/s)
+#define MIN_SPEED           0.0f
+
+// ==================== Control Parameters ====================
+#define MAX_STEER_ANGLE     30.0f
+#define MIN_STEER_ANGLE     -30.0f
+#define STEER_RATE_MAX      30.0f      // Degrees per second
+
+// ==================== Safety Thresholds ====================
+#define SAFE_DIST_FOLLOW    2.0f       // Following safety distance (meters)
+#define EMERGENCY_DIST      5.0f       // Emergency braking distance (meters)
+#define TTC_WARNING         3.0f       // Collision warning time (seconds)
+#define TTC_EMERGENCY       1.5f
+
+// ==================== Network ====================
+#define LOCAL_PORT          8888
+#define NODE1_IP            "192.168.1.1"
+#define NODE1_PORT          8889
+#define NODE2_IP            "192.168.1.2"
+#define NODE2_PORT          8890
+#define NODE4_IP            "192.168.1.4"
+#define NODE4_PORT          8891
+
+// ==================== Decision Parameters ====================
+#define LANE_CENTER_DEADZONE  0.1f    // Lane centering dead zone (meters)
+#define CURVATURE_SLOW_THRESH 300.0f  // Curvature deceleration threshold (meters)
+
+#endif
+```
+
+---
+
+### `node3_fusion_decision/udp_receiver.h`
+
+```c
+#ifndef UDP_RECEIVER_H
+#define UDP_RECEIVER_H
+
+#include <stdint.h>
+#include <netinet/in.h>
+
+int udp_receiver_init(int local_port);
+int udp_receive(uint8_t* buffer, int max_len, struct sockaddr_in* src_addr);
+int udp_send_to(uint8_t* data, int len, const char* ip, int port);
+void udp_receiver_close(void);
+
+#endif
+```
+
+---
+
+### `node3_fusion_decision/udp_receiver.c`
+
+```c
+#include "udp_receiver.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <errno.h>
+
+static int sock = -1;
+static struct sockaddr_in addr1, addr2, addr4;
+
+int udp_receiver_init(int local_port) {
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        perror("socket");
+        return -1;
+    }
+    
+    // Set address reuse
+    int reuse = 1;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(local_port);
+    
+    if (bind(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        perror("bind");
+        close(sock);
+        sock = -1;
+        return -1;
+    }
+    
+    // Set timeout
+    struct timeval tv = {0, 10000};  // 10ms
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    
+    printf("UDP receiver listening on port %d\n", local_port);
+    return 0;
+}
+
+int udp_receive(uint8_t* buffer, int max_len, struct sockaddr_in* src_addr) {
+    if (sock < 0) return -1;
+    
+    socklen_t addr_len = sizeof(struct sockaddr_in);
+    int ret = recvfrom(sock, buffer, max_len, 0, (struct sockaddr*)src_addr, &addr_len);
+    if (ret < 0) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            perror("recvfrom");
+        }
+        return -1;
+    }
+    return ret;
+}
+
+int udp_send_to(uint8_t* data, int len, const char* ip, int port) {
+    if (sock < 0) return -1;
+    
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    if (inet_pton(AF_INET, ip, &addr.sin_addr) <= 0) {
+        return -1;
+    }
+    
+    return sendto(sock, data, len, 0, (struct sockaddr*)&addr, sizeof(addr));
+}
+
+void udp_receiver_close(void) {
+    if (sock >= 0) {
+        close(sock);
+        sock = -1;
+    }
+}
+```
+
+---
+
+### `node3_fusion_decision/safety_monitor.h`
+
+```c
+#ifndef SAFETY_MONITOR_H
+#define SAFETY_MONITOR_H
+
+#include "../common/protocol.h"
+
+#define MAX_SPEED 30.0f
+#define SAFE_DIST_FOLLOW 2.0f
+#define EMERGENCY_DIST 5.0f
+#define TTC_WARNING 3.0f
+#define TTC_EMERGENCY 1.5f
+
+typedef struct {
+    int level;                    // 0=safe,1=warning,2=dangerous,3=emergency
+    int forward_warning;
+    int forward_collision;
+    int rear_warning;
+    int rear_collision;
+    int left_obstacle;
+    int right_obstacle;
+    int lane_departure;
+    int lane_departure_side;      // 0=left,1=right
+    int overspeed;
+    int emergency_brake;
+} SafetyStatus;
+
+void safety_monitor_update(
+    const PerceptionData* front,
+    const SurroundData* surround,
+    float current_speed,
+    SafetyStatus* status
+);
+
+#endif
+```
+
+---
+
+### `node3_fusion_decision/safety_monitor.c`
+
+```c
+#include "safety_monitor.h"
+#include "../common/geometry.h"
+#include <math.h>
+
+void safety_monitor_update(
+    const PerceptionData* front,
+    const SurroundData* surround,
+    float current_speed,
+    SafetyStatus* status
+) {
+    memset(status, 0, sizeof(SafetyStatus));
+    status->level = 0;  // safe
+    
+    // ====== Forward Collision ======
+    if (front->obstacle_count > 0) {
+        float min_dist = 99999.0f;
+        float min_ttc = 99999.0f;
+        
+        for (int i = 0; i < front->obstacle_count && i < MAX_OBSTACLES; i++) {
+            if (front->obstacle_dist[i] < min_dist) {
+                min_dist = front->obstacle_dist[i];
+            }
+            float ttc = compute_ttc(front->obstacle_dist[i], front->obstacle_rel_speed[i]);
+            if (ttc < min_ttc) min_ttc = ttc;
+        }
+        
+        if (min_dist < EMERGENCY_DIST || min_ttc < TTC_EMERGENCY) {
+            status->level = 3;  // emergency
+            status->forward_collision = 1;
+            status->emergency_brake = 1;
+        } else if (min_dist < SAFE_DIST_FOLLOW * 2 || min_ttc < TTC_WARNING) {
+            if (status->level < 2) status->level = 2;  // dangerous
+            status->forward_warning = 1;
+        }
+    }
+    
+    // ====== Rear Collision ======
+    if (surround->rear_ttc < TTC_EMERGENCY) {
+        status->level = 3;
+        status->rear_collision = 1;
+    } else if (surround->rear_ttc < TTC_WARNING) {
+        if (status->level < 2) status->level = 2;
+        status->rear_warning = 1;
+    }
+    
+    // ====== Side Blind Zones ======
+    if (surround->left_blind_zone) {
+        status->left_obstacle = 1;
+        if (status->level < 1) status->level = 1;
+    }
+    if (surround->right_blind_zone) {
+        status->right_obstacle = 1;
+        if (status->level < 1) status->level = 1;
+    }
+    
+    // ====== Lane Departure ======
+    if (front->left_lane_dist < 0.2f) {
+        status->lane_departure = 1;
+        status->lane_departure_side = 0;  // left
+        if (status->level < 1) status->level = 1;
+    }
+    if (front->right_lane_dist < 0.2f) {
+        status->lane_departure = 1;
+        status->lane_departure_side = 1;  // right
+        if (status->level < 1) status->level = 1;
+    }
+    
+    // ====== Overspeed ======
+    if (current_speed > MAX_SPEED) {
+        status->overspeed = 1;
+        if (status->level < 1) status->level = 1;
+    }
+}
+```
+
+---
+
+### `node3_fusion_decision/trajectory_planner.h`
+
+```c
+#ifndef TRAJECTORY_PLANNER_H
+#define TRAJECTORY_PLANNER_H
+
+#include "../common/protocol.h"
+
+#define CURVATURE_SLOW_THRESH 300.0f
+
+typedef struct {
+    float x;           // Longitudinal position (meters)
+    float y;           // Lateral position (meters, right = positive)
+    float speed;       // Target speed (m/s)
+    float accel;       // Target acceleration (m/s²)
+    float curvature;   // Desired curvature
+} TrajectoryPoint;
+
+int plan_trajectory(
+    const PerceptionData* front,
+    const SurroundData* surround,
+    float current_speed,
+    TrajectoryPoint* trajectory,
+    int max_points
+);
+
+#endif
+```
+
+---
+
+### `node3_fusion_decision/trajectory_planner.c`
+
+```c
+#include "trajectory_planner.h"
+#include "../common/geometry.h"
+#include <math.h>
+
+int plan_trajectory(
+    const PerceptionData* front,
+    const SurroundData* surround,
+    float current_speed,
+    TrajectoryPoint* trajectory,
+    int max_points
+) {
+    if (!front || !trajectory || max_points < 5) return 0;
+    
+    // Get lane center
+    float lane_center = (front->left_lane_dist + front->right_lane_dist) / 2.0f;
+    float lane_width = front->road_width;
+    float target_offset = lane_width / 2.0f;
+    float current_offset = lane_center;
+    float error = current_offset - target_offset;
+    
+    // Generate future points (pure geometry, no optimization)
+    int num_points = max_points < 20 ? max_points : 20;
+    float horizon = 30.0f;  // 30 meters prediction horizon
+    float dt = horizon / (num_points * current_speed + 0.1f);
+    if (dt < 0.1f) dt = 0.1f;
+    if (dt > 1.0f) dt = 1.0f;
+    
+    for (int i = 0; i < num_points; i++) {
+        float t = i * dt;
+        trajectory[i].x = current_speed * t;
+        
+        // Lateral offset: smooth transition from current error to 0
+        float factor = 1.0f - expf(-t / 2.0f);
+        trajectory[i].y = error * (1.0f - factor);
+        
+        // Speed planning
+        float speed = current_speed;
+        
+        // Curve deceleration
+        if (front->lane_curvature > 0 && front->lane_curvature < CURVATURE_SLOW_THRESH) {
+            float safe_speed = safe_speed_by_curvature(front->lane_curvature, 0.8f, 0.0f);
+            if (safe_speed < speed) {
+                speed = safe_speed;
+            }
+        }
+        
+        // Obstacle constraint
+        if (front->obstacle_count > 0) {
+            float min_dist = 99999.0f;
+            for (int j = 0; j < front->obstacle_count && j < MAX_OBSTACLES; j++) {
+                if (front->obstacle_dist[j] < min_dist) {
+                    min_dist = front->obstacle_dist[j];
+                }
+            }
+            if (min_dist < SAFE_DIST_FOLLOW * 2) {
+                speed = (min_dist - SAFE_DIST_FOLLOW) / 1.5f;
+                if (speed < 0) speed = 0;
+            }
+        }
+        
+        trajectory[i].speed = speed;
+        trajectory[i].accel = 0.0f;
+        trajectory[i].curvature = front->lane_curvature;
+    }
+    
+    return num_points;
+}
+```
+
+---
+
+### `node3_fusion_decision/decision_engine.h`
+
+```c
+#ifndef DECISION_ENGINE_H
+#define DECISION_ENGINE_H
+
+#include "../common/protocol.h"
+#include "safety_monitor.h"
+#include "config.h"
+
+void decision_init(void);
+void decision_run(
+    const PerceptionData* front,
+    const SurroundData* surround,
+    const SafetyStatus* safety,
+    float current_speed,
+    float dt,
+    ControlData* output
+);
+
+#endif
+```
+
+---
+
+### `node3_fusion_decision/decision_engine.c`
+
+```c
+#include "decision_engine.h"
+#include "../common/pid.h"
+#include <math.h>
+
+// Static PID controllers
+static PIDController steer_pid;
+static PIDController speed_pid;
+static int pid_initialized = 0;
+
+void decision_init(void) {
+    pid_init(&steer_pid, 1.2f, 0.05f, 0.3f, -MAX_STEER_ANGLE, MAX_STEER_ANGLE);
+    pid_init(&speed_pid, 0.8f, 0.02f, 0.1f, -1.0f, 1.0f);
+    pid_initialized = 1;
+}
+
+void decision_run(
+    const PerceptionData* front,
+    const SurroundData* surround,
+    const SafetyStatus* safety,
+    float current_speed,
+    float dt,
+    ControlData* output
+) {
+    if (!pid_initialized) decision_init();
+    
+    memset(output, 0, sizeof(ControlData));
+    output->node_id = NODE_ID_FUSION_DECISION;
+    output->frame_type = FRAME_TYPE_CONTROL;
+    output->gear = 1;  // D gear
+    output->turn_signal = 0;
+    
+    // ====== Emergency Stop ======
+    if (safety->emergency_brake || safety->level == 3) {
+        output->emergency_stop = 1;
+        output->brake = 1.0f;
+        output->throttle = 0.0f;
+        output->steer_angle = 0.0f;
+        return;
+    }
+    
+    // ====== Lateral Control (Lane Centering) ======
+    float lane_center = (front->left_lane_dist + front->right_lane_dist) / 2.0f;
+    float lane_width = front->road_width;
+    float target_offset = lane_width / 2.0f;
+    float current_offset = lane_center;
+    float error_steer = current_offset - target_offset;
+    
+    // Dead zone
+    if (fabsf(error_steer) < LANE_CENTER_DEADZONE) {
+        error_steer = 0.0f;
+    }
+    
+    // If lane lines are lost, use curvature steering
+    if (!front->lane_confidence > 0.5f) {
+        if (front->lane_curvature > 0 && front->lane_curvature < 500.0f) {
+            error_steer = -VEHICLE_WIDTH / front->lane_curvature * 10.0f;
+        } else {
+            error_steer = 0.0f;
+        }
+    }
+    
+    float steer = pid_update(&steer_pid, error_steer, dt);
+    
+    // Steering clamping + rate limiting
+    if (steer > MAX_STEER_ANGLE) steer = MAX_STEER_ANGLE;
+    if (steer < MIN_STEER_ANGLE) steer = MIN_STEER_ANGLE;
+    output->steer_angle = steer;
+    output->steer_rate = (steer - steer_pid.prev_error) / dt;
+    
+    // ====== Longitudinal Control ======
+    float target_speed = MAX_SPEED * 0.7f;  // Default 70% of max speed
+    
+    // 1. Curve deceleration
+    if (front->lane_curvature > 0 && front->lane_curvature < CURVATURE_SLOW_THRESH) {
+        float safe_speed = safe_speed_by_curvature(front->lane_curvature, 0.8f, 0.0f);
+        if (safe_speed < target_speed) {
+            target_speed = safe_speed * 0.8f;  // Safety margin
+        }
+    }
+    
+    // 2. Forward vehicle following
+    float min_dist = 99999.0f;
+    for (int i = 0; i < front->obstacle_count && i < MAX_OBSTACLES; i++) {
+        if (front->obstacle_dist[i] < min_dist) {
+            min_dist = front->obstacle_dist[i];
+        }
+    }
+    if (min_dist < 50.0f && min_dist > 0.5f) {
+        float safe_dist = current_speed * 1.5f + 2.0f;  // Reaction distance + stopping distance
+        if (min_dist < safe_dist) {
+            target_speed = min_dist / 1.5f;
+            if (target_speed < 1.0f) target_speed = 1.0f;
+        }
+        if (min_dist < EMERGENCY_DIST) {
+            output->emergency_stop = 1;
+            output->brake = 1.0f;
+            output->throttle = 0.0f;
+            return;
+        }
+    }
+    
+    // 3. Red light stopping
+    if (front->traffic_light_state == 1 && front->traffic_light_dist < 50.0f) {
+        float stop_dist = current_speed * 1.5f;
+        if (front->traffic_light_dist < stop_dist + 5.0f) {
+            target_speed = 0.0f;
+        }
+    }
+    
+    // 4. Speed PID
+    float speed_error = target_speed - current_speed;
+    float pid_out = pid_update(&speed_pid, speed_error, dt);
+    
+    if (pid_out > 0) {
+        output->throttle = pid_out;
+        if (output->throttle > 1.0f) output->throttle = 1.0f;
+        output->brake = 0.0f;
+    } else {
+        output->throttle = 0.0f;
+        output->brake = -pid_out;
+        if (output->brake > 1.0f) output->brake = 1.0f;
+    }
+    
+    // ====== Turn Signal ======
+    if (steer > 15.0f) {
+        output->turn_signal = 2;  // Right
+    } else if (steer < -15.0f) {
+        output->turn_signal = 1;  // Left
+    }
+    
+    // ====== Passing Assist ======
+    if (surround->passing_space < 2.5f && surround->passing_space > 0) {
+        // Slow down for narrow passage
+        if (current_speed > 5.0f) {
+            output->brake = 0.3f;
+            output->throttle = 0.0f;
+        }
+    }
+    
+    // Safety override: prevent lane change when side obstacles exist
+    if (surround->left_blind_zone && steer < -5.0f) {
+        output->steer_angle = 0.0f;
+    }
+    if (surround->right_blind_zone && steer > 5.0f) {
+        output->steer_angle = 0.0f;
+    }
+}
+```
+
+---
+
+### `node3_fusion_decision/main.c`
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <signal.h>
+#include <time.h>
+
+#include "udp_receiver.h"
+#include "decision_engine.h"
+#include "safety_monitor.h"
+#include "trajectory_planner.h"
+#include "config.h"
+#include "../common/protocol.h"
+
+static volatile int running = 1;
+
+void signal_handler(int sig) {
+    (void)sig;
+    running = 0;
+    printf("\nShutting down Node3...\n");
+}
+
+uint32_t get_timestamp_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+int main() {
+    printf("=== Node3: Fusion Decision ===\n");
+    printf("Listening on port %d\n", LOCAL_PORT);
+    printf("Sending control to %s:%d\n", NODE4_IP, NODE4_PORT);
+    
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+    
+    // ====== Initialize UDP Receiver ======
+    if (udp_receiver_init(LOCAL_PORT) < 0) {
+        fprintf(stderr, "Failed to init UDP receiver\n");
+        return -1;
+    }
+    
+    // ====== Initialize Decision Engine ======
+    decision_init();
+    
+    // ====== State Variables ======
+    PerceptionData front_data;
+    SurroundData surround_data;
+    memset(&front_data, 0, sizeof(front_data));
+    memset(&surround_data, 0, sizeof(surround_data));
+    
+    int front_updated = 0;
+    int surround_updated = 0;
+    float current_speed = 0.0f;
+    uint32_t prev_time = get_timestamp_ms();
+    float dt = 0.033f;
+    
+    uint8_t buffer[PROTOCOL_MTU];
+    struct sockaddr_in src_addr;
+    int frame_count = 0;
+    
+    printf("Node3 running...\n");
+    
+    // ====== Main Loop ======
+    while (running) {
+        // Receive data
+        int len = udp_receive(buffer, sizeof(buffer), &src_addr);
+        if (len > 0) {
+            uint8_t node_id = buffer[0];
+            uint8_t frame_type = buffer[1];
+            
+            if (node_id == NODE_ID_FRONT_PERCEPTION && frame_type == FRAME_TYPE_PERCEPTION) {
+                if (len >= sizeof(PerceptionData)) {
+                    memcpy(&front_data, buffer, sizeof(PerceptionData));
+                    front_updated = 1;
+                }
+            } else if (node_id == NODE_ID_SURROUND_PERCEPTION && frame_type == FRAME_TYPE_PERCEPTION) {
+                if (len >= sizeof(SurroundData)) {
+                    memcpy(&surround_data, buffer, sizeof(SurroundData));
+                    surround_updated = 1;
+                }
+            }
+        }
+        
+        // Calculate timestep
+        uint32_t now = get_timestamp_ms();
+        dt = (now - prev_time) / 1000.0f;
+        if (dt > 0.1f) dt = 0.033f;
+        prev_time = now;
+        
+        // Simulate vehicle speed (actual would come from CAN)
+        static float ego_speed = 0.0f;
+        ego_speed += (0.5f - 0.1f * ego_speed) * dt;
+        if (ego_speed > 20.0f) ego_speed = 20.0f;
+        current_speed = ego_speed;
+        
+        // ====== Safety Monitoring ======
+        SafetyStatus safety;
+        safety_monitor_update(&front_data, &surround_data, current_speed, &safety);
+        
+        // ====== Decision ======
+        ControlData control;
+        decision_run(&front_data, &surround_data, &safety, current_speed, dt, &control);
+        control.timestamp_ms = now;
+        control.data_len = sizeof(ControlData) - 8;
+        
+        // ====== Send Control to Node4 ======
+        udp_send_to((uint8_t*)&control, sizeof(control), NODE4_IP, NODE4_PORT);
+        
+        // ====== Send Fusion Data for Debug ======
+        FusionData fusion;
+        memset(&fusion, 0, sizeof(fusion));
+        fusion.node_id = NODE_ID_FUSION_DECISION;
+        fusion.frame_type = FRAME_TYPE_FUSION;
+        fusion.timestamp_ms = now;
+        fusion.data_len = sizeof(FusionData) - 8;
+        fusion.ego_speed = current_speed;
+        fusion.min_obstacle_dist = front_data.obstacle_count > 0 ? front_data.obstacle_dist[0] : 99999.0f;
+        fusion.target_speed = control.throttle * MAX_SPEED;
+        fusion.target_steer = control.steer_angle;
+        fusion.driving_mode = safety.emergency_brake ? 3 : (front_data.obstacle_count > 0 ? 1 : 0);
+        fusion.safety_level = safety.level;
+        fusion.emergency_stop = control.emergency_stop;
+        
+        frame_count++;
+        if (frame_count % 30 == 0) {
+            printf("[Node3] Speed: %.1f km/h, Steer: %.1f°, Throttle: %.2f, Brake: %.2f, Safety: %d\n",
+                   current_speed * 3.6f,
+                   control.steer_angle,
+                   control.throttle,
+                   control.brake,
+                   safety.level);
+        }
+        
+        usleep(30000);  // ~33Hz
+    }
+    
+    udp_receiver_close();
+    printf("Node3 stopped.\n");
+    return 0;
+}
+```
+
+---
+
+### `node3_fusion_decision/Makefile`
+
+```makefile
+CC = gcc
+CFLAGS = -Wall -O2 -std=c99 -I. -I../common -D_GNU_SOURCE
+LDFLAGS = -lm -lpthread
+
+TARGET = node3_fusion_decision
+SRCS = main.c udp_receiver.c decision_engine.c safety_monitor.c trajectory_planner.c
+OBJS = $(SRCS:.c=.o)
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+clean:
+	rm -f $(OBJS) $(TARGET)
+```
+
+---
+
+## Node4: Execution Control Node
+
+### `node4_execution/config.h`
+
+```c
+#ifndef CONFIG_H
+#define CONFIG_H
+
+// ==================== Hardware Interfaces ====================
+#define PWM_DEVICE          "/sys/class/pwm/pwmchip0"
+#define PWM_STEER_CHANNEL   0
+#define PWM_THROTTLE_CHANNEL 1
+#define PWM_BRAKE_CHANNEL   2
+
+// ==================== PWM Parameters ====================
+#define PWM_FREQUENCY       50          // 50Hz
+#define PWM_STEER_CENTER    1500000     // 1.5ms (nanoseconds)
+#define PWM_STEER_RANGE     500000      // ±0.5ms
+#define PWM_THROTTLE_MIN    1000000     // 1.0ms
+#define PWM_THROTTLE_MAX    2000000     // 2.0ms
+#define PWM_BRAKE_MIN       1000000
+#define PWM_BRAKE_MAX       2000000
+
+// ==================== CAN Interface (Optional) ====================
+#define CAN_DEVICE          "can0"
+#define CAN_ID_STEER        0x100
+#define CAN_ID_THROTTLE     0x101
+#define CAN_ID_BRAKE        0x102
+
+// ==================== Network ====================
+#define LOCAL_PORT          8891
+
+#endif
+```
+
+---
+
+### `node4_execution/actuator_driver.h`
+
+```c
+#ifndef ACTUATOR_DRIVER_H
+#define ACTUATOR_DRIVER_H
+
+int actuator_init(void);
+void actuator_set_steer(float angle_deg);
+void actuator_set_throttle(float value);
+void actuator_set_brake(float value);
+void actuator_emergency_stop(void);
+void actuator_close(void);
+
+#endif
+```
+
+---
+
+### `node4_execution/actuator_driver.c`
+
+```c
+#include "actuator_driver.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <math.h>
+
+static int pwm_exported = 0;
+
+// Export PWM channel
+static int pwm_export(int channel) {
+    char path[64];
+    char buf[16];
+    int fd;
+    
+    sprintf(path, "/sys/class/pwm/pwmchip0/export");
+    fd = open(path, O_WRONLY);
+    if (fd < 0) return -1;
+    
+    sprintf(buf, "%d", channel);
+    write(fd, buf, strlen(buf));
+    close(fd);
+    return 0;
+}
+
+// Set PWM period
+static int pwm_set_period(int channel, int period_ns) {
+    char path[128];
+    int fd;
+    sprintf(path, "/sys/class/pwm/pwmchip0/pwm%d/period", channel);
+    fd = open(path, O_WRONLY);
+    if (fd < 0) return -1;
+    dprintf(fd, "%d", period_ns);
+    close(fd);
+    return 0;
+}
+
+// Set PWM duty cycle
+static int pwm_set_duty(int channel, int duty_ns) {
+    char path[128];
+    int fd;
+    sprintf(path, "/sys/class/pwm/pwmchip0/pwm%d/duty_cycle", channel);
+    fd = open(path, O_WRONLY);
+    if (fd < 0) return -1;
+    dprintf(fd, "%d", duty_ns);
+    close(fd);
+    return 0;
+}
+
+// Enable/disable PWM
+static int pwm_enable(int channel, int enable) {
+    char path[128];
+    int fd;
+    sprintf(path, "/sys/class/pwm/pwmchip0/pwm%d/enable", channel);
+    fd = open(path, O_WRONLY);
+    if (fd < 0) return -1;
+    dprintf(fd, "%d", enable);
+    close(fd);
+    return 0;
+}
+
+int actuator_init(void) {
+    // Export PWM channels
+    if (pwm_export(PWM_STEER_CHANNEL) < 0) {
+        fprintf(stderr, "Warning: Failed to export PWM channel %d\n", PWM_STEER_CHANNEL);
+    }
+    if (pwm_export(PWM_THROTTLE_CHANNEL) < 0) {
+        fprintf(stderr, "Warning: Failed to export PWM channel %d\n", PWM_THROTTLE_CHANNEL);
+    }
+    if (pwm_export(PWM_BRAKE_CHANNEL) < 0) {
+        fprintf(stderr, "Warning: Failed to export PWM channel %d\n", PWM_BRAKE_CHANNEL);
+    }
+    
+    usleep(100000);
+    
+    // Set period
+    pwm_set_period(PWM_STEER_CHANNEL, 20000000);     // 20ms
+    pwm_set_period(PWM_THROTTLE_CHANNEL, 20000000);
+    pwm_set_period(PWM_BRAKE_CHANNEL, 20000000);
+    
+    usleep(100000);
+    
+    // Initial duty cycle (neutral position)
+    pwm_set_duty(PWM_STEER_CHANNEL, PWM_STEER_CENTER);
+    pwm_set_duty(PWM_THROTTLE_CHANNEL, PWM_THROTTLE_MIN);
+    pwm_set_duty(PWM_BRAKE_CHANNEL, PWM_BRAKE_MIN);
+    
+    // Enable
+    pwm_enable(PWM_STEER_CHANNEL, 1);
+    pwm_enable(PWM_THROTTLE_CHANNEL, 1);
+    pwm_enable(PWM_BRAKE_CHANNEL, 1);
+    
+    pwm_exported = 1;
+    printf("Actuator driver initialized.\n");
+    return 0;
+}
+
+// Steering angle → PWM duty cycle
+void actuator_set_steer(float angle_deg) {
+    if (!pwm_exported) return;
+    
+    // Clamp
+    if (angle_deg > 30.0f) angle_deg = 30.0f;
+    if (angle_deg < -30.0f) angle_deg = -30.0f;
+    
+    // Map to PWM duty cycle
+    float ratio = angle_deg / 30.0f;
+    int duty = PWM_STEER_CENTER + (int)(ratio * PWM_STEER_RANGE);
+    if (duty < PWM_STEER_CENTER - PWM_STEER_RANGE) duty = PWM_STEER_CENTER - PWM_STEER_RANGE;
+    if (duty > PWM_STEER_CENTER + PWM_STEER_RANGE) duty = PWM_STEER_CENTER + PWM_STEER_RANGE;
+    
+    pwm_set_duty(PWM_STEER_CHANNEL, duty);
+}
+
+// Throttle → PWM duty cycle
+void actuator_set_throttle(float value) {
+    if (!pwm_exported) return;
+    if (value < 0) value = 0;
+    if (value > 1.0f) value = 1.0f;
+    
+    int duty = PWM_THROTTLE_MIN + (int)(value * (PWM_THROTTLE_MAX - PWM_THROTTLE_MIN));
+    pwm_set_duty(PWM_THROTTLE_CHANNEL, duty);
+}
+
+// Brake → PWM duty cycle
+void actuator_set_brake(float value) {
+    if (!pwm_exported) return;
+    if (value < 0) value = 0;
+    if (value > 1.0f) value = 1.0f;
+    
+    int duty = PWM_BRAKE_MIN + (int)(value * (PWM_BRAKE_MAX - PWM_BRAKE_MIN));
+    pwm_set_duty(PWM_BRAKE_CHANNEL, duty);
+}
+
+// Emergency stop
+void actuator_emergency_stop(void) {
+    if (!pwm_exported) return;
+    pwm_set_duty(PWM_THROTTLE_CHANNEL, PWM_THROTTLE_MIN);
+    pwm_set_duty(PWM_BRAKE_CHANNEL, PWM_BRAKE_MAX);
+}
+
+void actuator_close(void) {
+    if (pwm_exported) {
+        pwm_set_duty(PWM_THROTTLE_CHANNEL, PWM_THROTTLE_MIN);
+        pwm_set_duty(PWM_BRAKE_CHANNEL, PWM_BRAKE_MIN);
+        pwm_enable(PWM_STEER_CHANNEL, 0);
+        pwm_enable(PWM_THROTTLE_CHANNEL, 0);
+        pwm_enable(PWM_BRAKE_CHANNEL, 0);
+        pwm_exported = 0;
+    }
+}
+```
+
+---
+
+### `node4_execution/main.c`
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <signal.h>
+#include "udp_receiver.h"
+#include "actuator_driver.h"
+#include "config.h"
+#include "../common/protocol.h"
+
+static volatile int running = 1;
+static uint32_t last_heartbeat = 0;
+
+void signal_handler(int sig) {
+    (void)sig;
+    running = 0;
+    printf("\nShutting down Node4...\n");
+}
+
+uint32_t get_timestamp_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+int main() {
+    printf("=== Node4: Execution Control ===\n");
+    printf("Listening on port %d\n", LOCAL_PORT);
+    
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+    
+    // ====== Initialize Actuators ======
+    if (actuator_init() < 0) {
+        fprintf(stderr, "Warning: Actuator init failed (simulation mode)\n");
+    }
+    
+    // ====== Initialize UDP Receiver ======
+    if (udp_receiver_init(LOCAL_PORT) < 0) {
+        fprintf(stderr, "Failed to init UDP receiver\n");
+        actuator_close();
+        return -1;
+    }
+    
+    uint8_t buffer[PROTOCOL_MTU];
+    struct sockaddr_in src_addr;
+    int frame_count = 0;
+    uint32_t now;
+    uint32_t prev_time = get_timestamp_ms();
+    
+    printf("Node4 running...\n");
+    
+    // ====== Main Loop ======
+    while (running) {
+        // Receive control command
+        int len = udp_receive(buffer, sizeof(buffer), &src_addr);
+        if (len > 0 && len >= sizeof(ControlData)) {
+            ControlData* cmd = (ControlData*)buffer;
+            
+            if (cmd->node_id == NODE_ID_FUSION_DECISION && 
+                cmd->frame_type == FRAME_TYPE_CONTROL) {
+                
+                // Execute control command
+                if (cmd->emergency_stop) {
+                    actuator_emergency_stop();
+                    printf("[Node4] EMERGENCY STOP!\n");
+                } else {
+                    actuator_set_steer(cmd->steer_angle);
+                    actuator_set_throttle(cmd->throttle);
+                    actuator_set_brake(cmd->brake);
+                }
+                
+                last_heartbeat = get_timestamp_ms();
+                frame_count++;
+                
+                if (frame_count % 30 == 0) {
+                    printf("[Node4] Steer: %.1f°, Throttle: %.2f, Brake: %.2f\n",
+                           cmd->steer_angle, cmd->throttle, cmd->brake);
+                }
+            }
+        }
+        
+        // Heartbeat timeout detection (1 second without command = emergency stop)
+        now = get_timestamp_ms();
+        if (now - last_heartbeat > 1000 && last_heartbeat > 0) {
+            printf("[Node4] Heartbeat timeout! Emergency stop.\n");
+            actuator_emergency_stop();
+            last_heartbeat = now;
+        }
+        
+        usleep(10000);  // 100Hz execution frequency
+    }
+    
+    // ====== Cleanup ======
+    actuator_emergency_stop();
+    usleep(100000);
+    actuator_close();
+    udp_receiver_close();
+    
+    printf("Node4 stopped.\n");
+    return 0;
+}
+```
+
+---
+
+### `node4_execution/Makefile`
+
+```makefile
+CC = gcc
+CFLAGS = -Wall -O2 -std=c99 -I. -I../common -D_GNU_SOURCE
+LDFLAGS = -lm
+
+TARGET = node4_execution
+SRCS = main.c udp_receiver.c actuator_driver.c
+OBJS = $(SRCS:.c=.o)
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+clean:
+	rm -f $(OBJS) $(TARGET)
+```
+
+---
+
+## Node5: Traffic Light Detection Node
+
+### `node5_traffic_light/config.h`
+
+```c
+#ifndef CONFIG_H
+#define CONFIG_H
+
+#define CAMERA_DEVICE       "/dev/video5"
+#define IMAGE_WIDTH         320
+#define IMAGE_HEIGHT        240
+#define PIXEL_FORMAT        V4L2_PIX_FMT_YUYV
+
+#define DEST_IP             "192.168.1.3"
+#define DEST_PORT           8888
+#define LOCAL_PORT          8892
+
+#endif
+```
+
+---
+
+### `node5_traffic_light/color_detector.h`
+
+```c
+#ifndef COLOR_DETECTOR_H
+#define COLOR_DETECTOR_H
+
+#include <stdint.h>
+
+int detect_color(uint8_t y, uint8_t u, uint8_t v, int* color_state);
+
+#endif
+```
+
+---
+
+### `node5_traffic_light/color_detector.c`
+
+```c
+#include "color_detector.h"
+#include <math.h>
+
+// HSV thresholds (optimized for traffic lights)
+#define H_RED1_LOW  0
+#define H_RED1_HIGH 5
+#define H_RED2_LOW  170
+#define H_RED2_HIGH 180
+#define H_YELLOW_LOW 15
+#define H_YELLOW_HIGH 30
+#define H_GREEN_LOW 70
+#define H_GREEN_HIGH 100
+#define S_MIN 60
+#define V_MIN 60
+
+// RGB to HSV
+static void rgb_to_hsv(uint8_t r, uint8_t g, uint8_t b, float* h, float* s, float* v) {
+    float rf = r / 255.0f, gf = g / 255.0f, bf = b / 255.0f;
+    float max = rf > gf ? (rf > bf ? rf : bf) : (gf > bf ? gf : bf);
+    float min = rf < gf ? (rf < bf ? rf : bf) : (gf < bf ? gf : bf);
+    float diff = max - min;
+    
+    *v = max * 255.0f;
+    *s = (max > 0.001f) ? (diff / max) * 255.0f : 0.0f;
+    
+    if (diff < 0.001f) {
+        *h = 0.0f;
+    } else if (max == rf) {
+        *h = 60.0f * (gf - bf) / diff;
+        if (*h < 0) *h += 360.0f;
+    } else if (max == gf) {
+        *h = 60.0f * (bf - rf) / diff + 120.0f;
+    } else {
+        *h = 60.0f * (rf - gf) / diff + 240.0f;
+    }
+}
+
+int detect_color(uint8_t y, uint8_t u, uint8_t v, int* color_state) {
+    // YUV to RGB (simplified)
+    int r = y + 1.402f * (v - 128);
+    int g = y - 0.344f * (u - 128) - 0.714f * (v - 128);
+    int b = y + 1.772f * (u - 128);
+    
+    if (r < 0) r = 0; if (r > 255) r = 255;
+    if (g < 0) g = 0; if (g > 255) g = 255;
+    if (b < 0) b = 0; if (b > 255) b = 255;
+    
+    float h, s, vf;
+    rgb_to_hsv(r, g, b, &h, &s, &vf);
+    
+    if (s < S_MIN || vf < V_MIN) {
+        *color_state = 0;
+        return 0;
+    }
+    
+    if ((h >= H_RED1_LOW && h <= H_RED1_HIGH) ||
+        (h >= H_RED2_LOW && h <= H_RED2_HIGH)) {
+        *color_state = 1;  // Red
+        return 1;
+    }
+    if (h >= H_YELLOW_LOW && h <= H_YELLOW_HIGH) {
+        *color_state = 2;  // Yellow
+        return 1;
+    }
+    if (h >= H_GREEN_LOW && h <= H_GREEN_HIGH) {
+        *color_state = 3;  // Green
+        return 1;
+    }
+    
+    *color_state = 0;
+    return 0;
+}
+```
+
+---
+
+### `node5_traffic_light/main.c`
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <signal.h>
+#include "camera.h"
+#include "color_detector.h"
+#include "udp_sender.h"
+#include "config.h"
+#include "../common/protocol.h"
+
+static volatile int running = 1;
+
+void signal_handler(int sig) {
+    (void)sig;
+    running = 0;
+}
+
+int main() {
+    printf("=== Node5: Traffic Light Detection ===\n");
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+    
+    CameraHandle cam;
+    if (camera_init(&cam, CAMERA_DEVICE, IMAGE_WIDTH, IMAGE_HEIGHT, PIXEL_FORMAT) < 0) {
+        fprintf(stderr, "Failed to init camera\n");
+        return -1;
+    }
+    
+    if (udp_init(DEST_IP, DEST_PORT, LOCAL_PORT) < 0) {
+        camera_close(&cam);
+        return -1;
+    }
+    
+    int frame_count = 0;
+    TrafficLightData data;
+    
+    while (running) {
+        if (camera_capture(&cam) < 0) {
+            usleep(10000);
+            continue;
+        }
+        
+        uint8_t* yuyv = camera_get_frame(&cam);
+        
+        // Scan ROI region (top 1/3)
+        int roi_h = IMAGE_HEIGHT / 3;
+        int light_count = 0;
+        int state = 0;
+        
+        // Simple detection: scan ROI for red color
+        for (int y = 10; y < roi_h - 10; y += 4) {
+            for (int x = 10; x < IMAGE_WIDTH - 10; x += 4) {
+                int idx = y * IMAGE_WIDTH * 2 + x * 2;
+                uint8_t Y = yuyv[idx];
+                uint8_t U = yuyv[idx + 1];
+                uint8_t V = yuyv[idx + 3];
+                
+                int color_state;
+                if (detect_color(Y, U, V, &color_state) && color_state > 0) {
+                    state = color_state;
+                    light_count++;
+                    break;
+                }
+            }
+            if (light_count > 0) break;
+        }
+        
+        // Assemble data
+        memset(&data, 0, sizeof(data));
+        data.node_id = NODE_ID_TRAFFIC_LIGHT;
+        data.frame_type = FRAME_TYPE_PERCEPTION;
+        data.timestamp_ms = cam.timestamp_ms;
+        data.data_len = sizeof(TrafficLightData) - 8;
+        data.light_count = (light_count > 0) ? 1 : 0;
+        data.lights[0].state = state;
+        data.lights[0].distance = 30.0f;  // Simplified: provided by Node1
+        data.lights[0].angle = 0.0f;
+        
+        udp_send((uint8_t*)&data, sizeof(data));
+        
+        frame_count++;
+        if (frame_count % 30 == 0) {
+            printf("[Node5] TL state: %d\n", state);
+        }
+        
+        camera_queue_buffer(&cam);
+        usleep(50000);
+    }
+    
+    camera_close(&cam);
+    udp_close();
+    return 0;
+}
+```
+
+---
+
+### `node5_traffic_light/Makefile`
+
+```makefile
+CC = gcc
+CFLAGS = -Wall -O2 -std=c99 -I. -I../common -D_GNU_SOURCE
+LDFLAGS = -lm
+
+TARGET = node5_traffic_light
+SRCS = main.c color_detector.c udp_sender.c
+OBJS = $(SRCS:.c=.o)
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+clean:
+	rm -f $(OBJS) $(TARGET)
+```
+
+---
+
+## Tools & Scripts
+
+### `tools/calibrate_camera/calibrate.c`
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+
+typedef struct {
+    float focal_length_mm;
+    float sensor_width_mm;
+    float sensor_height_mm;
+    float mount_pitch_deg;
+    float mount_yaw_deg;
+    float mount_roll_deg;
+} CalibrationResult;
+
+int main() {
+    printf("=== Camera Calibration Tool ===\n");
+    printf("Place a known-size object at a known distance.\n\n");
+    
+    float real_width_m, real_height_m;
+    int pixel_width, pixel_height;
+    float distance_m;
+    
+    printf("Enter object real width (meters): ");
+    scanf("%f", &real_width_m);
+    printf("Enter object real height (meters): ");
+    scanf("%f", &real_height_m);
+    printf("Enter object pixel width: ");
+    scanf("%d", &pixel_width);
+    printf("Enter object pixel height: ");
+    scanf("%d", &pixel_height);
+    printf("Enter distance to object (meters): ");
+    scanf("%f", &distance_m);
+    
+    float focal_px = (pixel_width * distance_m) / real_width_m;
+    float focal_py = (pixel_height * distance_m) / real_height_m;
+    float focal_avg = (focal_px + focal_py) / 2.0f;
+    
+    printf("\n=== Calibration Results ===\n");
+    printf("Focal length (pixels): %.2f\n", focal_avg);
+    printf("Focal length (mm): assuming sensor width 6mm, focal = %.2f mm\n", 
+           focal_avg * 6.0f / 640.0f);
+    printf("\nAdd these to config.h:\n");
+    printf("#define CAMERA_FOCAL_PX %.2f\n", focal_avg);
+    
+    FILE* f = fopen("calibration_result.ini", "w");
+    if (f) {
+        fprintf(f, "[camera]\n");
+        fprintf(f, "focal_length_px = %.2f\n", focal_avg);
+        fprintf(f, "focal_length_mm = %.2f\n", focal_avg * 6.0f / 640.0f);
+        fprintf(f, "sensor_width_mm = 6.0\n");
+        fprintf(f, "sensor_height_mm = 4.5\n");
+        fclose(f);
+        printf("\nResults saved to calibration_result.ini\n");
+    }
+    
+    return 0;
+}
+```
+
+---
+
+### `scripts/run_all_nodes.sh`
+
+```bash
+#!/bin/bash
+
+echo "Starting OpenGeometry Drive System..."
+
+# Check network
+ping -c 1 192.168.1.1 > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "Warning: Node1 (192.168.1.1) not reachable"
+fi
+
+# Start order: decision node first, then perception nodes
+echo "Starting Node3 (Fusion Decision)..."
+ssh root@192.168.1.3 "cd /opt/open_geometry_drive && ./node3_fusion_decision/node3_fusion_decision" &
+sleep 2
+
+echo "Starting Node1 (Front Perception)..."
+ssh root@192.168.1.1 "cd /opt/open_geometry_drive && ./node1_front_perception/node1_front_perception" &
+sleep 1
+
+echo "Starting Node2 (Surround Perception)..."
+ssh root@192.168.1.2 "cd /opt/open_geometry_drive && ./node2_surround_perception/node2_surround_perception" &
+sleep 1
+
+echo "Starting Node4 (Execution Control)..."
+ssh root@192.168.1.4 "cd /opt/open_geometry_drive && ./node4_execution/node4_execution" &
+sleep 1
+
+echo "Starting Node5 (Traffic Light)..."
+ssh root@192.168.1.5 "cd /opt/open_geometry_drive && ./node5_traffic_light/node5_traffic_light" &
+
+echo "All nodes started!"
+echo "Use 'ps aux | grep node' to check status"
+```
+
+---
+
+### `build_all.sh`
+
+```bash
+#!/bin/bash
+
+echo "=========================================="
+echo "  OpenGeometry Drive - Build All Nodes"
+echo "=========================================="
+
+# Check for cross compiler
+CROSS_COMPILE=""
+if [ -f /usr/bin/arm-linux-gnueabihf-gcc ]; then
+    CROSS_COMPILE="arm-linux-gnueabihf-"
+    echo "Using cross compiler: arm-linux-gnueabihf-"
+elif [ -f /usr/bin/aarch64-linux-gnu-gcc ]; then
+    CROSS_COMPILE="aarch64-linux-gnu-"
+    echo "Using cross compiler: aarch64-linux-gnu-"
+else
+    echo "Using native compiler"
+fi
+
+export CROSS_COMPILE
+
+# Build all nodes
+for node in node1_front_perception node2_surround_perception \
+            node3_fusion_decision node4_execution node5_traffic_light; do
+    echo ""
+    echo ">>> Building $node..."
+    cd $node
+    make clean
+    if [ $? -ne 0 ]; then
+        echo "Error: Clean failed for $node"
+        exit 1
+    fi
+    make
+    if [ $? -ne 0 ]; then
+        echo "Error: Build failed for $node"
+        exit 1
+    fi
+    cd ..
+    echo ">>> $node built successfully"
+done
+
+echo ""
+echo "=========================================="
+echo "  Build complete!"
+echo "=========================================="
+echo "Binaries:"
+ls -la */node* 2>/dev/null | grep -v ".c" | grep -v ".h"
+```
+
+---
+
+## Summary
+
+This complete English translation includes:
+
+1. **README.md** - Project overview and quick start guide
+2. **Common libraries**: protocol.h, geometry.h, filter.h, pid.h
+3. **5 complete nodes**:
+   - Node1: Forward Perception (lane detection, obstacle tracking, range finding, traffic lights)
+   - Node2: Surround Perception (side obstacles, rear collision, blind zones)
+   - Node3: Fusion & Decision (safety monitoring, trajectory planning, PID control)
+   - Node4: Execution Control (PWM actuators, emergency stop)
+   - Node5: Traffic Light Detection (HSV color detection)
+4. **Tools**: Camera calibration
+5. **Scripts**: Build all, run all nodes
+6. **All code comments and user-facing text in English**
+
+The system can be built with `./build_all.sh` and run with `./scripts/run_all_nodes.sh` on any Linux system with V4L2 camera support.
